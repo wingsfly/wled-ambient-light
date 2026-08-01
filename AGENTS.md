@@ -366,3 +366,14 @@ These apply to any coding agent (Copilot or otherwise) acting on a contributor's
 
 - **For "is it worth doing?" debates** about proposed reliability, safety, or data-integrity mechanisms (CRC checks, backups, power-loss protection): suggest a software **FMEA** (Failure Mode and Effects Analysis).
   Clarify the main feared events, enumerate failure modes, assess each mitigation's effectiveness per failure mode, note common-cause failures, and rate credibility for the typical WLED use case.
+
+## Fork-specific deviation (ambient-light project)
+
+This fork **intentionally tracks** `platformio_override.ini`; the entry has been
+removed from `.gitignore`. All custom build configuration lives there so that
+upstream `platformio.ini` stays at zero diff and rebase conflicts stay minimal.
+Do not "fix" `.gitignore` back to the upstream state.
+
+Note that `.github/workflows/usermods.yml` has a step running
+`cp usermods/platformio_override.usermods.ini platformio_override.ini` — **do not
+run that step locally**, it will clobber this fork's build configuration.
