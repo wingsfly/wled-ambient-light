@@ -25,7 +25,14 @@ case "${1:-status}" in
     for f in lamp_capi.cpp lamp_fft.h ../usermods/lamp/*.h; do
       [ "$f" -nt "liblamp.$EXT" ] && { echo "源码有更新，重新构建"; ./build.sh; break; }
     done
-    nohup python3 -u server.py --port "$PORT" --host 0.0.0.0 > server.log 2>&1 &
+    # 套一层重启循环。C++ 侧的段错误会直接杀掉整个 Python 进程（线上遇到过
+    # SIGBUS），Python 的 try/except 拦不住 —— 只能从外面把它拉起来。
+    # 崩了会在 server.log 里留一行时间戳，别让它静默重启掩盖问题。
+    nohup sh -c 'while :; do
+        python3 -u server.py --port '"$PORT"' --host 0.0.0.0
+        echo "[$(date "+%F %T")] 进程退出（码 $?），2 秒后重启 —— 若反复出现请查崩溃报告"
+        sleep 2
+    done' > server.log 2>&1 &
     sleep 2
     if pgrep -f "$PAT" >/dev/null 2>&1; then
       echo "已启动 pid=$(pgrep -f "$PAT")"
@@ -38,6 +45,8 @@ case "${1:-status}" in
       echo "启动失败："; cat server.log; exit 1
     fi ;;
   stop)
+    pkill -f 'while :; do' 2>/dev/null || true
+    sleep 1
     pkill -f "$PAT" 2>/dev/null && echo "已停止" || echo "没在跑" ;;
   restart) "$0" stop; sleep 1; "$0" start ;;
   status)

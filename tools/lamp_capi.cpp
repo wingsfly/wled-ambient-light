@@ -95,9 +95,21 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
     int32_t produced = 0;
     int32_t src = 0;
     while (src < count && produced < max_out) {
-        // 补满到一帧
+        // 补满到一帧。
+        //
+        // 这一段有两处坑，都出在**档位刚切过**的那一帧上（帧长会从 2048 变成 512）：
+        //
+        // 1. 用 assign 扩容会把已经攒进来的样本清零，而 filled 还指着它们 ——
+        //    不崩，但那一帧读到的是零。必须用 resize。
+        // 2. 档位切小时 filled 可能已经大于新的 n，`n - filled` 是 size_t 减法，
+        //    会下溢成天文数字，后面的 memcpy 直接写出边界。实测 SIGBUS，
+        //    整个进程被内核杀掉、连 Python traceback 都没有。
         const size_t n = h->p.an.n;
-        if (h->ring.size() < n * 2) h->ring.assign(n * 2, 0.0f);
+        if (h->ring.size() < n * 2) h->ring.resize(n * 2, 0.0f);
+        if (h->filled > n) {          // 只保留最近的 n 个样本
+            memmove(h->ring.data(), h->ring.data() + (h->filled - n), n * sizeof(float));
+            h->filled = n;
+        }
         const size_t want = n - h->filled;
         const size_t take = ((size_t)(count - src) < want) ? (size_t)(count - src) : want;
         memcpy(&h->ring[h->filled], pcm + src, take * sizeof(float));
@@ -113,6 +125,9 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
                                              h->mag.data(), t_ms);
         fxRender(h->fx, f, h->geo, h->white_balance, h->px.data());
 
+        // out 指向调用方（Python ctypes）的缓冲。produced 已由循环条件约束，
+        // 这里再挡一道 —— 越界写别人的堆是最难查的一类崩溃，代价只是一次比较。
+        if (produced >= max_out) break;
         LampFrameC &o = out[produced++];
         memcpy(o.bands, f.bands, sizeof(o.bands));
         o.bpm = f.bpm; o.conf = f.bpm_conf; o.phase = f.phase;
