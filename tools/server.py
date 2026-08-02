@@ -124,6 +124,10 @@ def serve_ws(sock, lib):
             if op != 0x2: continue                              # 只处理二进制 PCM
             n = len(data) // 4
             if n == 0: continue
+            # 一次别喂太多。浏览器正常一块是 2048 样本；远超这个量说明发送侧
+            # 出了问题（比如把整个 ArrayBuffer 当成一块发了），截断而不是照单全收。
+            if n > 1 << 20:
+                sys.stderr.write(f"丢弃异常大的音频块：{n} 样本\n"); continue
             pcm = (C.c_float * n).from_buffer_copy(data)
             got = lib.lamp_feed(h, pcm, n, buf, MAXF)
             if got <= 0: continue
@@ -143,6 +147,10 @@ def serve_ws(sock, lib):
             ws_send(sock, json.dumps(out, separators=(",", ":")).encode())
     except (ConnectionResetError, BrokenPipeError, OSError):
         pass
+    except Exception:
+        # 单条连接出错不该影响别人。注意：C++ 侧的段错误捕获不到 ——
+        # 那会直接杀掉整个进程，连 traceback 都没有（线上遇到过一次 SIGBUS）。
+        import traceback; traceback.print_exc()
     finally:
         lib.lamp_destroy(h)
         try: sock.close()

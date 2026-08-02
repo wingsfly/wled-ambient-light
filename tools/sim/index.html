@@ -230,8 +230,9 @@ async function playBuffer(pcm){
   while(playing && pos<pcm.length){
     const end=Math.min(pos+CH,pcm.length);
     if(ws.readyState!==1) break;
-    ws.send(pcm.subarray(pos,end).buffer.slice(
-      pcm.subarray(pos,end).byteOffset, undefined));
+    // ⚠ 不能写 pcm.subarray(a,b).buffer —— subarray 是**视图**，.buffer 拿到的是
+    // 整个底层 ArrayBuffer（整首歌几十 MB），不是那一块。要按字节偏移切。
+    ws.send(pcm.buffer.slice(pcm.byteOffset+pos*4, pcm.byteOffset+end*4));
     pos=end;
     const due=t0+pos/SR*1000;
     const wait=due-performance.now();
