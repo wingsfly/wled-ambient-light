@@ -109,6 +109,24 @@ class Arbiter {
     SourceId rise_target_ = SRC_NONE;   // 正在计时的升级候选
     uint32_t rise_since_  = 0;
 
+    SourceId fade_from_  = SRC_NONE;
+    uint32_t fade_start_ = 0;
+    bool     fading_     = false;
+
+    void commit(uint32_t now, SourceId target) {
+        // 过渡中途再次切换：直接以当前的淡入目标作为新的淡出源。
+        // 1500ms 的升级滞回让这种情况只可能来自用户在 300ms 内连点两次手动锁定，
+        // 视觉上可以忽略，不值得为它引入双缓冲。
+        fade_from_   = current_;
+        current_     = target;
+        fade_start_  = now;
+        // 从 SRC_NONE 起步时不淡入 —— 没有东西可淡出，开机第一帧就该是满权重。
+        fading_      = (cfg_.crossfade_ms > 0)
+                    && (fade_from_ != target)
+                    && (fade_from_ != SRC_NONE);
+        rise_target_ = SRC_NONE;
+    }
+
     static bool isActive(const SourceActivity &a, SourceId s) {
         switch (s) {
             case SRC_SNAPCAST: return a.snap;
@@ -161,24 +179,32 @@ inline ArbiterOutput Arbiter::update(uint32_t now_ms, const SourceInputs &in) {
                             || (target > current_)
                             || (cfg_.manual_lock != SRC_NONE);
         if (immediate) {
-            current_     = target;
-            rise_target_ = SRC_NONE;
+            commit(now_ms, target);
         } else if (rise_target_ != target) {
             rise_target_ = target;
             rise_since_  = now_ms;
         } else if (elapsedAtLeast(now_ms, rise_since_, cfg_.rise_hold_ms)) {
-            current_     = target;
-            rise_target_ = SRC_NONE;
+            commit(now_ms, target);
         }
     } else {
         rise_target_ = SRC_NONE;      // 候选变回当前源，计时作废
     }
 
+    if (fading_) {
+        const uint32_t el = (uint32_t)(now_ms - fade_start_);
+        if (el >= cfg_.crossfade_ms) fading_ = false;
+    }
+
     ArbiterOutput out;
-    out.from         = current_;
     out.to           = current_;
-    out.weight       = 1.0f;
     out.to_is_active = isActive(act, current_);
+    if (fading_) {
+        out.from   = fade_from_;
+        out.weight = (float)(uint32_t)(now_ms - fade_start_) / (float)cfg_.crossfade_ms;
+    } else {
+        out.from   = current_;
+        out.weight = 1.0f;
+    }
     return out;
 }
 
