@@ -154,6 +154,17 @@ class Handler(SimpleHTTPRequestHandler):
     lib = None
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.join(HERE, "sim"), **kw)
+    def guess_type(self, path):
+        # SimpleHTTPRequestHandler 对 .html 只返回 "text/html"，不带 charset，
+        # 浏览器于是按默认编码解析 —— UTF-8 的中文全成乱码。
+        # HTML 里的 <meta charset> 已经能救，但 HTTP 头优先级更高，两边都给。
+        t = super().guess_type(path)
+        base = t.split(";")[0].strip()
+        if base in ("text/html", "text/plain", "text/css",
+                    "text/javascript", "application/javascript", "application/json"):
+            return base + "; charset=utf-8"
+        return t
+
     def log_message(self, fmt, *a):
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % a))
     def do_GET(self):
