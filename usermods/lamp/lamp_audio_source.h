@@ -54,6 +54,14 @@ struct SourceActivity {
     bool mic  = false;
 };
 
+// 仲裁结果。交叉淡入期间 from != to，消费者按 weight 混音。
+struct ArbiterOutput {
+    SourceId from   = SRC_NONE;   // 淡出源；无过渡时等于 to
+    SourceId to     = SRC_NONE;   // 当前 / 淡入源
+    float    weight = 1.0f;       // to 的权重 [0,1]，1.0 = 过渡完成
+    bool     to_is_active = false;// to 这一路此刻是否真的在出数据
+};
+
 class Arbiter {
   public:
     explicit Arbiter(const ArbiterConfig &cfg) : cfg_(cfg) {}
@@ -66,6 +74,9 @@ class Arbiter {
     // now 若倒退哪怕 1ms，无符号差值会回绕成巨大值而立刻判超时 ——
     // 这与「距上次已过 49.7 天」在数值上不可区分。
     SourceActivity evaluateActivity(uint32_t now_ms, const SourceInputs &in);
+
+    // 主入口。每个音频块调一次，now_ms 用 millis()。
+    ArbiterOutput update(uint32_t now_ms, const SourceInputs &in);
 
   private:
     ArbiterConfig cfg_;
@@ -93,6 +104,27 @@ class Arbiter {
         if (!t.armed) { t.armed = true; t.since = now; }
         return !elapsedAtLeast(now, t.since, timeout_ms);
     }
+
+    SourceId current_     = SRC_NONE;
+    SourceId rise_target_ = SRC_NONE;   // 正在计时的升级候选
+    uint32_t rise_since_  = 0;
+
+    static bool isActive(const SourceActivity &a, SourceId s) {
+        switch (s) {
+            case SRC_SNAPCAST: return a.snap;
+            case SRC_LINE:     return a.line;
+            case SRC_MIC:      return a.mic;
+            default:           return false;
+        }
+    }
+
+    SourceId pickTarget(const SourceActivity &a) const {
+        if (cfg_.manual_lock != SRC_NONE) return cfg_.manual_lock;
+        if (a.snap) return SRC_SNAPCAST;
+        if (a.line && cfg_.line_mode != LINE_MANUAL_ONLY) return SRC_LINE;
+        if (a.mic)  return SRC_MIC;
+        return SRC_NONE;
+    }
 };
 
 inline SourceActivity Arbiter::evaluateActivity(uint32_t now_ms, const SourceInputs &in) {
@@ -110,6 +142,44 @@ inline SourceActivity Arbiter::evaluateActivity(uint32_t now_ms, const SourceInp
     }
     a.mic = in.mic_ok;
     return a;
+}
+
+inline ArbiterOutput Arbiter::update(uint32_t now_ms, const SourceInputs &in) {
+    const SourceActivity act    = evaluateActivity(now_ms, in);
+    const SourceId       target = pickTarget(act);
+
+    if (target != current_) {
+        // 立即提交的四种情形：
+        //   开机（从 SRC_NONE 起步，否则灯要黑 1.5 秒）
+        //   当前源已死 —— 1500ms 滞回是为了保护一个**正在工作**的源不被毛刺抢走，
+        //     当前源都死了就没什么可保护的。注意这一条不能用 (target > current_)
+        //     代替：MIC(2) 挂掉而 LINE(1) 活着时 1 > 2 不成立，会白等 1.5 秒
+        //   目标优先级更低 —— 例如配置切到 MANUAL_ONLY 把仍然活着的 LINE 排除掉
+        //   手动锁定
+        const bool immediate = (current_ == SRC_NONE)
+                            || !isActive(act, current_)
+                            || (target > current_)
+                            || (cfg_.manual_lock != SRC_NONE);
+        if (immediate) {
+            current_     = target;
+            rise_target_ = SRC_NONE;
+        } else if (rise_target_ != target) {
+            rise_target_ = target;
+            rise_since_  = now_ms;
+        } else if (elapsedAtLeast(now_ms, rise_since_, cfg_.rise_hold_ms)) {
+            current_     = target;
+            rise_target_ = SRC_NONE;
+        }
+    } else {
+        rise_target_ = SRC_NONE;      // 候选变回当前源，计时作废
+    }
+
+    ArbiterOutput out;
+    out.from         = current_;
+    out.to           = current_;
+    out.weight       = 1.0f;
+    out.to_is_active = isActive(act, current_);
+    return out;
 }
 
 } // namespace lamp
