@@ -18,7 +18,24 @@ rsync -az --delete \
 ssh macbook-m4-max "cd $D/tools && ./build.sh && (nohup python3 -u server.py --port 8080 --host 0.0.0.0 > server.log 2>&1 &)"
 ```
 
-停：`ssh macbook-m4-max "pkill -f 'server.py --port 8080'"`
+## 在 20.3 上启停
+
+登上去之后用 `run.sh`，不用记 nohup 那串：
+
+```bash
+cd ~/workspace/codex-deployments/lamp-sim/tools
+./run.sh start      # 源码比 liblamp 新会自动重编
+./run.sh status
+./run.sh log
+./run.sh stop
+```
+
+**服务跑在 20.3 上，不在开发机上。** `liblamp.dylib` 也是在 20.3 编译的 ——
+Apple Silicon 原生，不跨架构。
+
+刻意**没做** launchd 持久化：这台机器的角色是 `temporary-workloads-only`，
+重启后自己再 `start` 一次。要常驻的话该换到 `persistent-service` 角色的机器
+（`mac-mini-101`）。
 
 ## 怎么打开（这一段要紧）
 
