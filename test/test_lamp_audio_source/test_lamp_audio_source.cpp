@@ -216,6 +216,192 @@ void test_evaluate_activity_is_idempotent_for_same_timestamp(void) {
     TEST_ASSERT_FALSE(a.evaluateActivity(6000, in).snap);
 }
 
+// ── 目标选择与滞回 ────────────────────────────────────────
+
+static SourceInputs all(bool snap, bool line, bool mic = true) {
+    SourceInputs in;
+    in.snap_streaming = snap; in.snap_audible = snap;
+    in.line_detected  = line; in.line_audible = line;
+    in.mic_ok = mic;
+    return in;
+}
+
+// 开机时 current 是 SRC_NONE，第一路可用的源必须立刻接管 —— 否则灯要黑 1.5 秒。
+void test_first_source_commits_immediately(void) {
+    Arbiter a{ArbiterConfig{}};
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, a.update(0, all(false, false)).to);
+}
+
+// 升优先级：必须连续满足 1.5 秒。
+void test_rising_priority_requires_hold(void) {
+    Arbiter a{ArbiterConfig{}};
+    a.update(0, all(false, false));                                  // 落在 MIC
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC,  a.update(1000, all(false, true)).to);
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC,  a.update(2499, all(false, true)).to);
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, a.update(2500, all(false, true)).to);  // 满 1500ms
+}
+
+// 候选中途消失，计时必须清零重来。
+void test_rise_timer_resets_when_candidate_drops(void) {
+    Arbiter a{ArbiterConfig{}};
+    a.update(0, all(false, false));
+    a.update(1000, all(false, true));                 // LINE 开始计时
+    a.update(2000, all(false, false));                // LINE 掉了
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC,  a.update(2600, all(false, true)).to);  // 重新计时
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, a.update(4100, all(false, true)).to);
+}
+
+// 当前源死掉 → 立即回落，不等 1.5 秒。歧义①的直接断言。
+void test_fallback_is_immediate(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_ALWAYS;   // 拔出即刻失活，便于构造
+    Arbiter a{cfg};
+    a.update(0, all(false, true));                    // 立即落在 LINE
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, a.update(10, all(false, true)).to);
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC,  a.update(20, all(false, false)).to);  // 同一刻回落
+}
+
+// 高优先级源在位时，低优先级源上线不抢。
+void test_higher_priority_wins(void) {
+    Arbiter a{ArbiterConfig{}};
+    a.update(0, all(true, false));                    // SNAP
+    TEST_ASSERT_EQUAL_UINT8(SRC_SNAPCAST, a.update(5000, all(true, true)).to);
+}
+
+// 手动锁定：立即生效，不受滞回约束，且压过更高优先级的活跃源。
+void test_manual_lock_overrides_immediately(void) {
+    ArbiterConfig cfg; cfg.manual_lock = SRC_MIC;
+    Arbiter a{cfg};
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, a.update(0, all(true, true)).to);
+}
+
+// 歧义③：锁定指向的源死了也不跑，但如实上报 to_is_active。
+void test_manual_lock_on_dead_source_reports_inactive(void) {
+    ArbiterConfig cfg; cfg.manual_lock = SRC_LINE;
+    Arbiter a{cfg};
+    ArbiterOutput o = a.update(0, all(true, false));  // LINE 没插，SNAP 却活着
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, o.to);          // 锁定绝对生效
+    TEST_ASSERT_FALSE(o.to_is_active);                // 但如实上报
+}
+
+// 歧义②：LINE_MANUAL_ONLY 下自动仲裁永不选中 3.5mm。
+void test_manual_only_never_auto_selects_line(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_MANUAL_ONLY;
+    Arbiter a{cfg};
+    a.update(0, all(false, false));
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, a.update(9999, all(false, true)).to);
+    // 只看上面这一刻，名字里的「永不」是句空话：LINE 是 9999 才上线的，
+    // 「其实把 LINE 选成了目标」的实现此刻也还困在 1500ms 滞回里，两者不可分辨。
+    // 必须跨过滞回窗口再看一眼。（变异验证实测：缺这行，去掉 pickTarget 里
+    // MANUAL_ONLY 判断的变异体全绿存活。）
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, a.update(99999, all(false, true)).to);
+}
+
+// 但手动锁定仍能选中它。
+void test_manual_only_still_allows_manual_lock(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_MANUAL_ONLY; cfg.manual_lock = SRC_LINE;
+    Arbiter a{cfg};
+    ArbiterOutput o = a.update(0, all(false, true));
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, o.to);
+    TEST_ASSERT_TRUE(o.to_is_active);
+}
+
+// 三路全灭 → SRC_NONE。下游靠这个信号把音乐类特效切成氛围类。
+void test_all_dead_yields_none(void) {
+    Arbiter a{ArbiterConfig{}};
+    ArbiterOutput o = a.update(0, all(false, false, /*mic=*/false));
+    TEST_ASSERT_EQUAL_UINT8(SRC_NONE, o.to);
+    TEST_ASSERT_FALSE(o.to_is_active);
+}
+
+// ── 以下五条由变异验证补出，每条都对应一个曾经全绿存活的变异体 ──────────
+
+// 歧义③的另一半：锁定的「立即」不只是开机那一次。上面三条锁定测试全都从
+// current_ == SRC_NONE 起步，于是「开机立即接管」那一条就顺手把它们全兜住了 ——
+// 把 immediate 里的 manual_lock 判断整个删掉，那三条依然全绿。
+// 这条从已经落在 MIC 的状态起步，锁定指向优先级更高的 SNAP：少了那个判断，
+// 它会被当成普通升优先级白等 1500ms。
+void test_manual_lock_commits_immediately_even_when_already_on_another_source(void) {
+    ArbiterConfig cfg;
+    Arbiter a{cfg};
+    a.update(0, all(false, false));                   // 自动落在 MIC
+    cfg.manual_lock = SRC_SNAPCAST;
+    a.setConfig(cfg);                                 // 用户此刻按下「锁定 Snapcast」
+    TEST_ASSERT_EQUAL_UINT8(SRC_SNAPCAST, a.update(1, all(true, false)).to);
+}
+
+// MIC 这一路的 to_is_active 单独钉一条：isActive 里那一 case 改读 a.line 也能
+// 全绿。锁定到 MIC 是唯一能构造出「to 是 MIC 而 MIC 已死」的办法 —— 自动仲裁
+// 下 MIC 一死就被 immediate 立刻换掉了，停不在那个状态上。
+//
+// 附带一提：这条本来是想钉「to_is_active 描述的是 to 而不是正在计时的候选」，
+// 但 immediate 补上 !isActive(act, current_) 之后那已经不可能出错了 ——
+// 滞回期内 current_ 必然活着（否则 immediate 就触发了），而 target 也必然活着
+// （不活的 target 只能是 SRC_NONE，那又会触发 target > current_），两者恒同。
+// 把 isActive(act, current_) 改成 isActive(act, target) 因此成了等价变异体。
+void test_mic_activity_is_reported_from_mic_not_line(void) {
+    ArbiterConfig cfg; cfg.manual_lock = SRC_MIC;
+    Arbiter a{cfg};
+    ArbiterOutput o = a.update(0, all(false, true, /*mic=*/false));  // 麦挂了，LINE 活着
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, o.to);
+    TEST_ASSERT_FALSE(o.to_is_active);
+}
+
+// SNAP 这一路的 to_is_active 之前没有任何断言，isActive 里那一 case 改读 a.mic
+// 也能全绿。这里让麦坏掉、Snapcast 在放，两者取值必须相反。
+void test_snapcast_activity_is_reported_from_snapcast_not_mic(void) {
+    Arbiter a{ArbiterConfig{}};
+    ArbiterOutput o = a.update(0, all(true, false, /*mic=*/false));
+    TEST_ASSERT_EQUAL_UINT8(SRC_SNAPCAST, o.to);
+    TEST_ASSERT_TRUE(o.to_is_active);
+}
+
+// 立即提交那条路径也必须清掉正在计时的候选。不清的话，一次回落会把旧计时
+// 原样留着，下一次升优先级就吃着这份陈旧时间提前发生 —— 这里提前了 200ms，
+// 极端情况下可以直接归零。
+void test_immediate_commit_clears_pending_rise_timer(void) {
+    Arbiter a{ArbiterConfig{}};
+    a.update(0,    all(false, true));        // 落在 LINE
+    a.update(1000, all(true,  true));        // SNAP 上线，开始计时
+    a.update(1100, all(false, false));       // 两路全掉 → 立即回落到 MIC
+    a.update(1200, all(true,  false));       // SNAP 重新上线，计时必须从这里重算
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC,      a.update(2500, all(true, false)).to);  // 距 1200 才 1300ms
+    TEST_ASSERT_EQUAL_UINT8(SRC_SNAPCAST, a.update(2700, all(true, false)).to);  // 满 1500ms
+}
+
+// 当前源死了但替补优先级更高时，也应立即切换。1500ms 滞回是为了保护一个
+// **正在工作**的源不被短暂毛刺抢走 —— 当前源已死就没什么可保护的。
+// 纯数值比较 (target > current_) 抓不到这一情形：MIC(2) 挂掉而 LINE(1) 活着时
+// 1 > 2 不成立，会白等 1.5 秒的氛围模式。
+void test_dead_current_yields_immediately_even_to_higher_priority(void) {
+    Arbiter a{ArbiterConfig{}};
+    a.update(0, all(false, false));                          // 落在 MIC
+    SourceInputs in = all(false, true, /*mic=*/false);       // 麦挂了，LINE 活着
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, a.update(10, in).to);  // 同一刻就走
+}
+
+// 「当前源活着、但被策略排除」也必须立即提交。这一情形 !isActive 抓不到：
+// LINE 物理上仍然活跃，只是 MANUAL_ONLY 不许自动选它，靠的是数值比较
+// MIC(2) > LINE(1)。这正是 immediate 里那两条判据缺一不可的原因 ——
+// 变异验证实测：补上 !isActive 之后，原先杀掉「删数值比较」的那批测试全被
+// 兜住了，没有这一条那个变异体就复活了。
+void test_live_but_policy_excluded_source_yields_immediately(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_ALWAYS;
+    Arbiter a{cfg};
+    a.update(0, all(false, true));                    // 落在 LINE，物理活跃
+    cfg.line_mode = LINE_MANUAL_ONLY;                 // 改设置；LINE 仍插着且有声
+    a.setConfig(cfg);
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, a.update(10, all(false, true)).to);
+}
+
+// 本 Task 还没有交叉淡入（Task 3），输出必须恒等于「过渡已完成」。钉住它是为了
+// 让 Task 3 引入过渡时**必须**显式改这一条，而不是让 from/weight 悄悄漂成别的值。
+void test_no_transition_yet_so_from_equals_to_and_weight_is_one(void) {
+    Arbiter a{ArbiterConfig{}};
+    ArbiterOutput o = a.update(0, all(false, false));
+    TEST_ASSERT_EQUAL_UINT8(o.to, o.from);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_snap_inactive_when_not_streaming);
@@ -234,5 +420,22 @@ int main(int, char **) {
     RUN_TEST(test_silence_timer_survives_millis_wraparound);
     RUN_TEST(test_silence_timer_works_when_starting_at_max_uint32);
     RUN_TEST(test_evaluate_activity_is_idempotent_for_same_timestamp);
+    RUN_TEST(test_first_source_commits_immediately);
+    RUN_TEST(test_rising_priority_requires_hold);
+    RUN_TEST(test_rise_timer_resets_when_candidate_drops);
+    RUN_TEST(test_fallback_is_immediate);
+    RUN_TEST(test_higher_priority_wins);
+    RUN_TEST(test_manual_lock_overrides_immediately);
+    RUN_TEST(test_manual_lock_on_dead_source_reports_inactive);
+    RUN_TEST(test_manual_only_never_auto_selects_line);
+    RUN_TEST(test_manual_only_still_allows_manual_lock);
+    RUN_TEST(test_all_dead_yields_none);
+    RUN_TEST(test_manual_lock_commits_immediately_even_when_already_on_another_source);
+    RUN_TEST(test_mic_activity_is_reported_from_mic_not_line);
+    RUN_TEST(test_snapcast_activity_is_reported_from_snapcast_not_mic);
+    RUN_TEST(test_immediate_commit_clears_pending_rise_timer);
+    RUN_TEST(test_dead_current_yields_immediately_even_to_higher_priority);
+    RUN_TEST(test_live_but_policy_excluded_source_yields_immediately);
+    RUN_TEST(test_no_transition_yet_so_from_equals_to_and_weight_is_one);
     return UNITY_END();
 }
