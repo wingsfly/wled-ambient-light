@@ -351,6 +351,124 @@ void test_window_tail_is_zeroed(void) {
         TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1e-9f, 0.0f, g_an.w[i], "尾部残留了上一档的窗系数");
 }
 
+// ── 谱形特征 ──────────────────────────────────────────────
+
+// 能量集中在某一段时，质心应落在那一段的中心频率附近。
+void test_centroid_lands_on_the_energetic_band(void) {
+    float b[NUM_BANDS];
+    for (int target = 2; target < NUM_BANDS - 1; ++target) {
+        for (int i = 0; i < NUM_BANDS; ++i) b[i] = 0.0f;
+        b[target] = 3.7f;          // 不用 1.0：那样 den 恰好为 1，除不除都一样
+        const float c = spectralCentroid(b);
+        TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1.0f, bandCenterHz(target), c,
+            "质心没落在有能量的那一段");
+    }
+}
+
+// 能量从低频移到高频，质心必须单调上升。
+void test_centroid_rises_with_energy_moving_up(void) {
+    float lo[NUM_BANDS], hi[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) { lo[i] = (i < 4) ? 1.0f : 0.01f; hi[i] = (i > 11) ? 1.0f : 0.01f; }
+    TEST_ASSERT_TRUE_MESSAGE(spectralCentroid(hi) > spectralCentroid(lo) * 3.0f,
+        "质心没跟着能量重心走");
+}
+
+// 对数频段要用**几何**中心：43-86Hz 这一段的中心是 61Hz 不是 64.5Hz。
+void test_band_center_is_geometric(void) {
+    const float g = sqrtf(kBandEdgeHz[0] * kBandEdgeHz[1]);
+    const float a = 0.5f * (kBandEdgeHz[0] + kBandEdgeHz[1]);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, g, bandCenterHz(0));
+    TEST_ASSERT_TRUE_MESSAGE(fabsf(bandCenterHz(0) - a) > 1.0f, "用了算术中心");
+}
+
+void test_centroid_of_silence_is_zero_not_nan(void) {
+    float b[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) b[i] = 0.0f;
+    const float c = spectralCentroid(b);
+    TEST_ASSERT_FALSE(isnan(c));
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, c);
+}
+
+// 各段等能量 = 白噪声 → 平坦度 1。
+void test_flatness_of_flat_spectrum_is_one(void) {
+    float b[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) b[i] = 0.37f;
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.01f, 1.0f, spectralFlatness(b), "等能量谱的平坦度应为 1");
+}
+
+// 能量集中在一段 = 纯音 → 平坦度趋近 0。
+void test_flatness_of_a_single_peak_is_near_zero(void) {
+    float b[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) b[i] = 1e-4f;
+    b[6] = 1.0f;
+    TEST_ASSERT_TRUE_MESSAGE(spectralFlatness(b) < 0.15f, "单峰谱的平坦度过高");
+}
+
+void test_flatness_is_bounded_and_ordered(void) {
+    float flat[NUM_BANDS], peaky[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) { flat[i] = 0.5f; peaky[i] = (i == 3) ? 1.0f : 0.001f; }
+    const float f1 = spectralFlatness(flat), f2 = spectralFlatness(peaky);
+    TEST_ASSERT_TRUE(f1 >= 0.0f && f1 <= 1.0f);
+    TEST_ASSERT_TRUE(f2 >= 0.0f && f2 <= 1.0f);
+    TEST_ASSERT_TRUE_MESSAGE(f1 > f2 + 0.5f, "平坦谱与尖峰谱分不开");
+}
+
+// 用 log 求和而非连乘：16 个 0.01 量级的数直接相乘会下溢到 0，
+// 平坦度会假性变成 0，任何安静的段落都会被判成「纯音」。
+void test_flatness_survives_tiny_magnitudes(void) {
+    float b[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) b[i] = 1e-5f;      // 连乘会得到 1e-80，下溢
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.02f, 1.0f, spectralFlatness(b),
+        "极小幅度下平坦度崩了 —— 可能用了连乘");
+}
+
+// 静音必须报 0，**不能报 1**。
+// 地板项让全零输入看起来「完美平坦」，那样静音与白噪声给出同样的值，
+// 而 StyleFeatures 会拿这个 1.0 去为「快档」投满票 —— 房间安静时灯反而躁动。
+void test_flatness_of_silence_is_zero_not_one(void) {
+    float b[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) b[i] = 0.0f;
+    const float f = spectralFlatness(b);
+    TEST_ASSERT_FALSE(isnan(f));
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1e-6f, 0.0f, f, "静音的平坦度报成了非零");
+
+    // 而白噪声必须是 1 —— 两者不能给出同一个值
+    float w[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) w[i] = 0.5f;
+    TEST_ASSERT_TRUE_MESSAGE(spectralFlatness(w) > 0.9f, "白噪声的平坦度应接近 1");
+}
+
+// 单段为 0 不得把整个平坦度拉到 0 —— 高频段常常真的没能量。
+void test_one_empty_band_does_not_zero_the_flatness(void) {
+    float b[NUM_BANDS];
+    for (int i = 0; i < NUM_BANDS; ++i) b[i] = 0.4f;
+    b[15] = 0.0f;
+    TEST_ASSERT_TRUE_MESSAGE(spectralFlatness(b) > 0.3f,
+        "一段为零就把平坦度归零了 —— 缺少地板项");
+}
+
+// 非有限值出现在**任何**一段都不得污染结果，NaN 与 inf 都要试。
+void test_spectral_features_reject_non_finite(void) {
+    for (int pos = 0; pos < NUM_BANDS; ++pos) {
+        for (int kind = 0; kind < 2; ++kind) {
+            float b[NUM_BANDS];
+            for (int i = 0; i < NUM_BANDS; ++i) b[i] = 0.4f;
+            b[pos] = kind ? INFINITY : NAN;
+            const float c = spectralCentroid(b);
+            const float f = spectralFlatness(b);
+            TEST_ASSERT_FALSE_MESSAGE(isnan(c), "非有限值渗进了质心");
+            TEST_ASSERT_FALSE_MESSAGE(isinf(c), "inf 渗进了质心");
+            TEST_ASSERT_FALSE_MESSAGE(isnan(f), "非有限值渗进了平坦度");
+            // 只丢坏的那一段，**其余 15 段照常计入**。整帧放弃返回 0 也能满足
+            // 「不是 NaN 且在 [0,1] 内」，但那是把一次坏采样放大成一帧静音。
+            TEST_ASSERT_TRUE_MESSAGE(f > 0.9f,
+                "一段坏值让整帧平坦度归零了 —— 应该只跳过那一段");
+            // 其余 15 段仍是 0.4，质心应落在合理范围内
+            TEST_ASSERT_TRUE_MESSAGE(c > 0.0f && c < 12000.0f, "质心跑出了频率范围");
+        }
+    }
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_edges_are_monotonic_and_cover_spec_range);
@@ -370,6 +488,17 @@ int main(int, char **) {
     RUN_TEST(test_single_tone_lands_in_expected_band);
     RUN_TEST(test_bands_are_independent);
     RUN_TEST(test_boundary_bin_belongs_to_upper_band);
+    RUN_TEST(test_centroid_lands_on_the_energetic_band);
+    RUN_TEST(test_centroid_rises_with_energy_moving_up);
+    RUN_TEST(test_band_center_is_geometric);
+    RUN_TEST(test_centroid_of_silence_is_zero_not_nan);
+    RUN_TEST(test_flatness_of_flat_spectrum_is_one);
+    RUN_TEST(test_flatness_of_a_single_peak_is_near_zero);
+    RUN_TEST(test_flatness_is_bounded_and_ordered);
+    RUN_TEST(test_flatness_survives_tiny_magnitudes);
+    RUN_TEST(test_flatness_of_silence_is_zero_not_one);
+    RUN_TEST(test_one_empty_band_does_not_zero_the_flatness);
+    RUN_TEST(test_spectral_features_reject_non_finite);
     RUN_TEST(test_analysis_init_rejects_bad_length);
     RUN_TEST(test_window_tail_is_zeroed);
     return UNITY_END();
