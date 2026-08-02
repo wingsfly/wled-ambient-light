@@ -205,6 +205,22 @@ void test_silence_timer_works_when_starting_at_max_uint32(void) {
     TEST_ASSERT_FALSE(a.evaluateActivity(t0 + 5000u, in).snap);
 }
 
+// elapsedAtLeast 上面写着「别改成有符号比较」，但在 Task 3 的变异重跑之前没有任何
+// 测试钉住它 —— 上面两条回绕测试跨的都是几秒量级的间隔，那里有符号和无符号取值
+// 完全相同，改成 (int32_t) 照样全绿。差别只在**经过时长**跨过 2^31ms 时出现。
+// 这个时长是可达的：源一旦 present 且持续静音，t.since 就再也不更新（重置只发生在
+// 出声或拔出），失活之后计时器仍原地挂着。于是插着 3.5mm 不放音乐，或 Snapcast
+// 挂着静音流，24.85 天后差值变成负数，已经失活的源会自己复活再活 24.85 天。
+void test_silence_timeout_does_not_revive_after_24_days(void) {
+    Arbiter a{ArbiterConfig{}};
+    SourceInputs in = micOnly();
+    in.snap_streaming = true;
+    in.snap_audible   = false;
+    TEST_ASSERT_TRUE (a.evaluateActivity(0, in).snap);
+    TEST_ASSERT_FALSE(a.evaluateActivity(5000, in).snap);
+    TEST_ASSERT_FALSE(a.evaluateActivity(0x80000000u, in).snap);   // 24.85 天，不得复活
+}
+
 // 文档声称同一个 now_ms 重复调用是幂等的，但没有测试钉住。补上。
 void test_evaluate_activity_is_idempotent_for_same_timestamp(void) {
     Arbiter a{ArbiterConfig{}};
@@ -393,12 +409,117 @@ void test_live_but_policy_excluded_source_yields_immediately(void) {
     TEST_ASSERT_EQUAL_UINT8(SRC_MIC, a.update(10, all(false, true)).to);
 }
 
-// 本 Task 还没有交叉淡入（Task 3），输出必须恒等于「过渡已完成」。钉住它是为了
-// 让 Task 3 引入过渡时**必须**显式改这一条，而不是让 from/weight 悄悄漂成别的值。
-void test_no_transition_yet_so_from_equals_to_and_weight_is_one(void) {
+// ── 交叉淡入 ──────────────────────────────────────────────
+
+// 原 test_no_transition_yet_so_from_equals_to_and_weight_is_one 的续任。
+// Task 2 用它钉住「本 Task 还没有过渡」，就是为了逼 Task 3 显式面对这一条而不是让
+// from/weight 悄悄漂走。Task 3 面对了，结论是**断言一字不改**：开机第一帧从
+// SRC_NONE 起步，没有东西可淡出，本来就该是满权重的稳态。改的只有名字和理由 ——
+// 原来的名字声称的是「本 Task 还没实现」，那个理由已经过期了。
+void test_steady_state_has_no_crossfade(void) {
     Arbiter a{ArbiterConfig{}};
     ArbiterOutput o = a.update(0, all(false, false));
     TEST_ASSERT_EQUAL_UINT8(o.to, o.from);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
+}
+
+// 切换瞬间权重为 0，300ms 后为 1，中点为 0.5。
+void test_crossfade_ramps_over_300ms(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_ALWAYS;
+    Arbiter a{cfg};
+    a.update(0, all(false, false));                      // MIC
+    a.update(1000, all(false, true));                    // LINE 起计时
+    ArbiterOutput o = a.update(2500, all(false, true));  // 满 1500ms，提交
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC,  o.from);
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, o.to);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, o.weight);
+
+    o = a.update(2650, all(false, true));                // 过去 150ms
+    TEST_ASSERT_EQUAL_FLOAT(0.5f, o.weight);
+
+    o = a.update(2800, all(false, true));                // 满 300ms
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
+    TEST_ASSERT_EQUAL_UINT8(o.to, o.from);               // 过渡结束，from 归位
+}
+
+// 过渡结束后不得重新开始。
+void test_crossfade_stays_finished(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_ALWAYS;
+    Arbiter a{cfg};
+    a.update(0, all(false, false));
+    a.update(1000, all(false, true));
+    a.update(2500, all(false, true));
+    a.update(2800, all(false, true));
+    ArbiterOutput o = a.update(9999, all(false, true));
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
+    TEST_ASSERT_EQUAL_UINT8(o.to, o.from);
+}
+
+// crossfade_ms = 0 时必须是硬切，不能除零。
+void test_zero_crossfade_is_hard_cut(void) {
+    ArbiterConfig cfg; cfg.crossfade_ms = 0; cfg.line_mode = LINE_ALWAYS;
+    Arbiter a{cfg};
+    a.update(0, all(false, false));
+    a.update(1000, all(false, true));
+    ArbiterOutput o = a.update(2500, all(false, true));
+    TEST_ASSERT_EQUAL_UINT8(SRC_LINE, o.to);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
+    TEST_ASSERT_EQUAL_UINT8(o.to, o.from);
+}
+
+// 权重必须单调不减，且恒在 [0,1] —— 逐点断言看不见的那类错误。
+void test_crossfade_weight_is_monotonic_and_bounded(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_ALWAYS;
+    Arbiter a{cfg};
+    a.update(0, all(false, false));
+    a.update(1000, all(false, true));
+    float prev = -1.0f;
+    for (uint32_t t = 2500; t <= 2900; t += 10) {
+        ArbiterOutput o = a.update(t, all(false, true));
+        TEST_ASSERT_TRUE(o.weight >= 0.0f && o.weight <= 1.0f);
+        TEST_ASSERT_TRUE(o.weight >= prev);
+        prev = o.weight;
+    }
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, prev);
+}
+
+// 时钟回绕期间发生切换，权重不得跳变。
+void test_crossfade_survives_millis_wraparound(void) {
+    ArbiterConfig cfg; cfg.line_mode = LINE_ALWAYS;
+    Arbiter a{cfg};
+    const uint32_t base = 0xFFFFFF00u;                   // 距回绕 256ms
+    a.update(base, all(false, false));
+    a.update(base + 1u, all(false, true));
+    a.update(base + 1501u, all(false, true));            // 提交，此时已回绕
+    ArbiterOutput o = a.update(base + 1651u, all(false, true));
+    TEST_ASSERT_EQUAL_FLOAT(0.5f, o.weight);
+}
+
+// 上面那条 test_steady_state_has_no_crossfade 只覆盖了「无过渡」契约的一半：它走的是
+// 开机提交到 MIC 的路径，commit() 会把 fading_ 显式写成 false，于是它兜不住
+// 「fading_ 的初值本身就是错的」。三路全灭时 target == current_ == SRC_NONE，
+// commit() 一次都不会被调用，输出组装读到的完全是那个初值 —— 这是整个类里唯一
+// 到达得了「从未 commit 过」这条路径的场景，而 test_all_dead_yields_none 只断言了
+// to 和 to_is_active，没碰 from/weight。
+// （变异验证实测：把 fading_ 初始化成 true，除这一条外全绿。真实后果是开机时麦
+// 驱动还没起来又什么都没插，头 300ms 下游会拿到一个 SRC_NONE → SRC_NONE 的假
+// 过渡和一个分数权重。）
+void test_no_transition_reported_when_nothing_ever_commits(void) {
+    Arbiter a{ArbiterConfig{}};
+    ArbiterOutput o = a.update(0, all(false, false, /*mic=*/false));
+    TEST_ASSERT_EQUAL_UINT8(SRC_NONE, o.to);
+    TEST_ASSERT_EQUAL_UINT8(SRC_NONE, o.from);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
+    o = a.update(150, all(false, false, /*mic=*/false));   // 仍在 300ms 窗口内
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
+}
+
+// 开机从 SRC_NONE 起步时不该淡入 —— 没有东西可淡出，第一帧就该是满权重。
+void test_boot_from_none_does_not_fade(void) {
+    Arbiter a{ArbiterConfig{}};
+    ArbiterOutput o = a.update(0, all(false, false));
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, o.to);
+    TEST_ASSERT_EQUAL_UINT8(SRC_MIC, o.from);
     TEST_ASSERT_EQUAL_FLOAT(1.0f, o.weight);
 }
 
@@ -419,6 +540,7 @@ int main(int, char **) {
     RUN_TEST(test_mic_follows_mic_ok);
     RUN_TEST(test_silence_timer_survives_millis_wraparound);
     RUN_TEST(test_silence_timer_works_when_starting_at_max_uint32);
+    RUN_TEST(test_silence_timeout_does_not_revive_after_24_days);
     RUN_TEST(test_evaluate_activity_is_idempotent_for_same_timestamp);
     RUN_TEST(test_first_source_commits_immediately);
     RUN_TEST(test_rising_priority_requires_hold);
@@ -436,6 +558,13 @@ int main(int, char **) {
     RUN_TEST(test_immediate_commit_clears_pending_rise_timer);
     RUN_TEST(test_dead_current_yields_immediately_even_to_higher_priority);
     RUN_TEST(test_live_but_policy_excluded_source_yields_immediately);
-    RUN_TEST(test_no_transition_yet_so_from_equals_to_and_weight_is_one);
+    RUN_TEST(test_steady_state_has_no_crossfade);
+    RUN_TEST(test_crossfade_ramps_over_300ms);
+    RUN_TEST(test_crossfade_stays_finished);
+    RUN_TEST(test_zero_crossfade_is_hard_cut);
+    RUN_TEST(test_crossfade_weight_is_monotonic_and_bounded);
+    RUN_TEST(test_crossfade_survives_millis_wraparound);
+    RUN_TEST(test_no_transition_reported_when_nothing_ever_commits);
+    RUN_TEST(test_boot_from_none_does_not_fade);
     return UNITY_END();
 }
