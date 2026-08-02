@@ -7,8 +7,9 @@ using namespace lamp;
 void setUp(void) {}
 void tearDown(void) {}
 
-// docs/10-灯管与驱动.md 实测：原厂满白线上字节 GRB = DD FF C2，
-// 即 R=255 G=221 B=194。白平衡必须能从纯白复现出这组值。
+// wingsfly/ambient-light 仓库的 docs/10-灯管与驱动.md 实测：
+// 原厂满白线上字节 GRB = DD FF C2，即 R=255 G=221 B=194。
+// 白平衡必须能从纯白复现出这组值。
 void test_pure_white_reproduces_measured_factory_values(void) {
     Rgb out = applyWhiteBalance(Rgb{255, 255, 255}, true);
     TEST_ASSERT_EQUAL_UINT8(255, out.r);
@@ -44,15 +45,15 @@ void test_never_increases_and_never_wraps(void) {
 // 内部锚点，钉住四舍五入而非截断。
 //
 // **这条是必需的，不是锦上添花。** 满白那条锚不住取整方式 ——
-//   255 × 0.867 = 221.085 → round=221, floor=221   ← 相同
-//   255 × 0.761 = 194.055 → round=194, floor=194   ← 相同
+//   255 × 221/255 = 221.000 → round=221, floor=221   ← 相同
+//   255 × 194/255 = 194.000 → round=194, floor=194   ← 相同
 // 也就是说，把 +0.5f 去掉改成截断，上面四条测试**全绿通过**。
 // 这与 Task 3 的量化约定变异体是同一类盲区，必须用小数部分 ≥ 0.5 的输入才能区分。
 void test_interior_anchors_pin_rounding(void) {
     Rgb a = applyWhiteBalance(Rgb{100, 100, 100}, true);
     TEST_ASSERT_EQUAL_UINT8(87, a.g);   // 86.7  → round 87，floor 86
     Rgb b = applyWhiteBalance(Rgb{2, 2, 2}, true);
-    TEST_ASSERT_EQUAL_UINT8(2, b.g);    // 1.734 → round 2，floor 1
+    TEST_ASSERT_EQUAL_UINT8(2, b.g);    // 1.733 → round 2，floor 1
     TEST_ASSERT_EQUAL_UINT8(2, b.b);    // 1.522 → round 2，floor 1
 }
 
@@ -82,7 +83,7 @@ void test_monotonic_in_input(void) {
 void test_channels_are_independent(void) {
     Rgb out = applyWhiteBalance(Rgb{123, 45, 200}, true);
     TEST_ASSERT_EQUAL_UINT8(123, out.r);  // 123 × 1.000
-    TEST_ASSERT_EQUAL_UINT8(39,  out.g);  // 39.015 → 39
+    TEST_ASSERT_EQUAL_UINT8(39,  out.g);  // 45 × 221/255 = 39.000（精确落整数，与满白同一现象）
     TEST_ASSERT_EQUAL_UINT8(152, out.b);  // 152.2  → 152
 }
 
