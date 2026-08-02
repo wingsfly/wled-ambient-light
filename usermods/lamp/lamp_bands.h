@@ -118,4 +118,60 @@ inline void computeBandEnergy(const Analysis &a, const float *mag, float *out) {
     }
 }
 
+// ── 由频段能量派生的两个谱形特征 ──────────────────────────
+//
+// 它们是 StyleFeatures 的后两个判据（§3.3.3）。放在这里而不是 lamp_style.h：
+// 它们是 16 段能量的派生量，与档位切换的策略无关。
+//
+// 之前这两项没有生产者，恒为 0，占掉 30% 的权重 —— speedDemand 的上限因此
+// 只有 0.70，而「极限打点」档的阈值是 0.78，**那个档位永远进不去**。
+// 四个档位实际只能用三个。
+
+// 第 i 段的几何中心频率。对数频段用几何中心，不是算术中心。
+inline float bandCenterHz(int i) {
+    return sqrtf(kBandEdgeHz[i] * kBandEdgeHz[i + 1]);
+}
+
+// 频谱质心：能量的加权重心，单位 Hz。亮/暗的直接度量。
+inline float spectralCentroid(const float *bands) {
+    double num = 0.0, den = 0.0;
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        const float e = bands[i];
+        if (!isfinite(e) || e <= 0.0f) continue;
+        num += (double)bandCenterHz(i) * e;
+        den += e;
+    }
+    if (!(den > 0.0)) return 0.0f;          // 静音：返回 0，由调用方当作「无信息」
+    return (float)(num / den);
+}
+
+// 频谱平坦度（Wiener entropy）：几何平均 / 算术平均，落在 [0,1]。
+// 白噪声各段等能量 → 1；单音集中在一段 → 趋近 0。
+//
+// 用 log 求和再 exp，不要连乘：16 个 0.01 量级的数直接相乘会下溢到 0。
+inline float spectralFlatness(const float *bands) {
+    double log_sum = 0.0, lin_sum = 0.0;
+    int n = 0;
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        const float e = bands[i];
+        if (!isfinite(e) || e < 0.0f) continue;
+        // 加一个极小的地板，否则任何一段为 0 都会让几何平均整体归零，
+        // 而那在音乐里很常见（高频段常常真的没能量）
+        const double v = (double)e + 1e-9;
+        log_sum += log(v);
+        lin_sum += v;
+        ++n;
+    }
+    if (n == 0 || !(lin_sum > 0.0)) return 0.0f;
+    const double ari = lin_sum / (double)n;
+    // 静音要报 0，不能报 1。地板项让全零输入看起来「完美平坦」——
+    // 那样静音与白噪声就分不开了，而 StyleFeatures 会拿这个 1.0 去投满票。
+    // 阈值取 1e-6：比地板项 1e-9 高三个数量级，又远低于任何真实信号。
+    if (ari < 1e-6) return 0.0f;
+    const double geo = exp(log_sum / (double)n);
+    double f = geo / ari;
+    if (!(f > 0.0)) return 0.0f;            // 含 NaN
+    return (f > 1.0) ? 1.0f : (float)f;
+}
+
 } // namespace lamp
