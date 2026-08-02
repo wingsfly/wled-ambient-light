@@ -32,4 +32,91 @@ inline uint16_t binEdge(int i, size_t n) {
     return (uint16_t)(b + 0.5f);
 }
 
+// 一个窗的主瓣**半宽**，单位 bin。段内 bin 数不到它的两倍时，
+// 主瓣会糊过段边界，那一段的读数就不再跨窗可比 —— 见 bandIsResolved()。
+inline uint16_t mainLobeHalfWidth(WindowType wt) {
+    switch (wt) {
+        case WIN_BLACKMAN_HARRIS: return 4;
+        case WIN_FLATTOP:         return 6;
+        case WIN_HANN:
+        default:                  return 2;
+    }
+}
+
+// 这一段在这个 (N, 窗) 下是否分得开。
+//
+// 这不是保护性检查，是**规格的一部分**：43Hz 的段宽在 N=512 下只有 1 个 bin，
+// 而 Hann 主瓣就是 2 bin —— 物理上分不开，跟实现无关。设计 §3.3 让
+// 「极限打点」档用 N=512 正是接受了低频分辨率的损失。
+inline bool bandIsResolved(int i, size_t n, WindowType wt) {
+    const uint16_t cnt = (uint16_t)(binEdge(i + 1, n) - binEdge(i, n));
+    return cnt >= (uint16_t)(2 * mainLobeHalfWidth(wt));
+}
+
+constexpr size_t kMaxFftLen = 2048;
+
+// 一次分析配置：窗系数、它的噪声功率增益、以及帧长，三者绑在一起。
+//
+// 绑在一起有两个理由。一是**不可能用错长度**：增益必须按同一个 n 算，
+// 分开传参就有写死成 1024 的机会，而那种错只在 n≠1024 时发作，
+// 还会被上一次调用残留在缓冲里的数据掩盖。二是**每帧不必重算**：
+// 100Hz 下重复 fillWindow(2048) 是两千次 cos 的白扔。
+//
+// 8KB，别放栈上 —— 调用方按静态或堆对象持有。
+struct Analysis {
+    size_t     n  = 0;
+    WindowType wt = WIN_HANN;
+    float      ng = 0.0f;      // mean(w²)
+    float      w[kMaxFftLen];
+};
+
+// 切换档位时调用；同一档位内每帧复用。
+//
+// 非法帧长返回 false 并**保持 a 不变** —— 不静默裁剪到 kMaxFftLen：
+// 那样会拿 2048 点的窗去处理一个声称 4096 点的谱，读出来的东西没有意义，
+// 而调用方还以为配置成功了。
+//
+// 尾部清零不是洁癖。增益按 a.n 算，若哪天有人把长度写死（比如 noisePowerGain
+// 里写成 1024），残留的旧窗系数会让结果看着仍然合理，缺陷就藏住了。
+inline bool analysisInit(Analysis &a, size_t n, WindowType wt) {
+    if (n < 64 || n > kMaxFftLen || (n & (n - 1)) != 0) return false;
+    a.n = n; a.wt = wt;
+    fillWindow(wt, a.w, n);
+    for (size_t i = n; i < kMaxFftLen; ++i) a.w[i] = 0.0f;
+    a.ng = noisePowerGain(a.w, n);
+    return true;
+}
+
+// 从幅度谱算 16 段能量，**结果与 (N, 窗) 无关**（在 bandIsResolved 的段上）。
+//
+// mag 是长度 a.n/2+1 的幅度谱（不是功率谱），来自对加了 a.w 窗的 a.n 点实数序列做 FFT。
+//
+// 归一化按 Parseval 走：
+//     Σ_{k∈段} |Y[k]|² · 2 / (n² · mean(w²))  =  该段内信号的功率
+// 三个因子都不能少：
+//   1) ×2 —— 实数 FFT 只取了单边谱
+//   2) n² —— DFT 未归一化，幅度正比于 n，功率正比于 n²
+//   3) 窗的**噪声功率增益** mean(w²)，不是相干增益 mean(w)。
+//      用相干增益会让 Hann 与 BH 差 0.5²/0.359² = 1.94 倍。
+//
+// **不要再除段内 bin 数。** 除 bin 数得到的是「每 bin 平均功率」，那个量对宽带
+// 噪声跨 N 一致，对纯音却不一致：纯音的能量集中在 1 个 bin，而段内 bin 数随 N 变。
+// Parseval 形式对两者都成立。
+//
+// 段区间是左闭右开 [binEdge(i), binEdge(i+1))，相邻段既不重叠也不留缝。
+//
+// 输出是 RMS 幅度量纲（对功率开方），所以输入幅度加倍时输出也加倍。
+inline void computeBandEnergy(const Analysis &a, const float *mag, float *out) {
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        const uint16_t lo = binEdge(i, a.n);
+        const uint16_t hi = binEdge(i + 1, a.n);
+
+        double p = 0.0;
+        for (uint16_t k = lo; k < hi; ++k) p += (double)mag[k] * (double)mag[k];
+
+        const double power = 2.0 * p / ((double)a.n * (double)a.n * (double)a.ng);
+        out[i] = (float)sqrt(power);
+    }
+}
+
 } // namespace lamp
