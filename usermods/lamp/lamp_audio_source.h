@@ -11,6 +11,8 @@
 
 #include <stdint.h>
 
+#include "lamp_time.h"
+
 namespace lamp {
 
 // 数值即优先级，越小越高。SRC_NONE 取 255，于是「优先级更低」直接写成数值更大。
@@ -89,12 +91,6 @@ class Arbiter {
     };
     SilenceTimer snap_silent_;
     SilenceTimer line_silent_;
-
-    // 无符号差值：now 回绕后 (now - since) 依然是正确的经过时长，
-    // 只要间隔小于 2^32 ms（49.7 天）。别改成有符号比较。
-    static bool elapsedAtLeast(uint32_t now, uint32_t since, uint32_t ms) {
-        return (uint32_t)(now - since) >= ms;
-    }
 
     // 通用的「有信号则重置、无信号则计时」判定。
     bool holdWhileSilent(uint32_t now, bool present, bool audible,

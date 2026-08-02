@@ -16,8 +16,7 @@
 
 namespace lamp {
 
-constexpr int   NUM_BANDS   = 16;
-constexpr float kSampleRate = 22050.0f;
+constexpr int NUM_BANDS = 16;
 
 constexpr float kBandEdgeHz[NUM_BANDS + 1] = {
       43.07f,   86.13f,  129.20f,  215.33f,  301.46f,  430.66f,
