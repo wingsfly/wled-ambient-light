@@ -33,6 +33,22 @@
 
 #include "lamp_ring_buffer.h"
 
+// 上面那句「不带 TSan 跑它只会制造虚假安全感」不止是提醒，这里把它变成编译期强制。
+// -fsanitize=thread 一旦从 native_tsan 的 build_flags 里掉了，本文件照样能编、能跑、
+// 能 PASS，只是再也抓不到任何东西 —— 正是 test_harness.cpp 里钉住 -std 时说的那类
+// 「坏了也不吭声」的故障，而且这里的沉默更难发现：测试结果始终是绿的。
+#if defined(__has_feature)
+#  if __has_feature(thread_sanitizer)
+#    define LAMP_TSAN_ENABLED 1
+#  endif
+#endif
+#if !defined(LAMP_TSAN_ENABLED) && defined(__SANITIZE_THREAD__)   // GCC 走这条
+#  define LAMP_TSAN_ENABLED 1
+#endif
+#ifndef LAMP_TSAN_ENABLED
+#  error "本文件必须在 -fsanitize=thread 下构建，请用 [env:native_tsan]"
+#endif
+
 using namespace lamp;
 
 void setUp(void) {}
