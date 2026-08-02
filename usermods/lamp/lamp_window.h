@@ -12,6 +12,11 @@
 
 namespace lamp {
 
+// 整条音频管线的采样率。放在这里而不是 lamp_bands.h：频段映射、档位 hop 换算、
+// 将来的 BeatTracker 都要用它，它不属于其中任何一个。
+// 22.05kHz 与 WLED 上游 AudioReactive 的默认值一致（设计 §3.2）。
+constexpr float kSampleRate = 22050.0f;
+
 enum WindowType : uint8_t {
     WIN_HANN            = 0,  // 主瓣窄，旁瓣 −31dB。频段总能量用它，默认
     WIN_BLACKMAN_HARRIS = 1,  // 主瓣约 2× 宽，旁瓣 −92dB。单峰定位用它
