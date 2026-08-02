@@ -1,0 +1,390 @@
+<title>氛围灯算法模拟器 · 实时</title>
+<style>
+:root{
+  --ink:#0d1014; --panel:#151a20; --panel2:#1b222a; --rule:#262e37;
+  --text:#c3ccd6; --dim:#6a7583; --amber:#ffb547; --amber-d:#8a5f20;
+  --lock:#4ec9a8; --gate:#e0574f; --glass:rgba(255,181,71,.07);
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;
+}
+@media (prefers-color-scheme:light){:root{
+  --ink:#eceef0; --panel:#fbfbfc; --panel2:#f2f4f6; --rule:#d3d8de;
+  --text:#1d242c; --dim:#69737f; --amber:#a35f00; --amber-d:#e0c48a;
+  --glass:rgba(163,95,0,.06);}}
+:root[data-theme="dark"]{--ink:#0d1014;--panel:#151a20;--panel2:#1b222a;--rule:#262e37;
+  --text:#c3ccd6;--dim:#6a7583;--amber:#ffb547;--amber-d:#8a5f20;--glass:rgba(255,181,71,.07);}
+:root[data-theme="light"]{--ink:#eceef0;--panel:#fbfbfc;--panel2:#f2f4f6;--rule:#d3d8de;
+  --text:#1d242c;--dim:#69737f;--amber:#a35f00;--amber-d:#e0c48a;--glass:rgba(163,95,0,.06);}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ink);color:var(--text);font-family:var(--sans);
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
+header{display:flex;align-items:baseline;gap:13px;flex-wrap:wrap;
+  padding-bottom:13px;border-bottom:1px solid var(--rule);margin-bottom:16px}
+h1{font-family:var(--mono);font-size:15px;font-weight:700;letter-spacing:.09em;
+  text-transform:uppercase;margin:0}
+.sub{font-size:12.5px;color:var(--dim)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--gate);display:inline-block;
+  margin-right:6px;vertical-align:middle}
+.dot.up{background:var(--lock)}
+.link{font-family:var(--mono);font-size:11px;color:var(--dim)}
+
+.note{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--amber);
+  padding:11px 14px;margin-bottom:16px;font-size:12.5px;border-radius:3px}
+.note b{color:var(--amber);font-weight:600}
+.note code{font-family:var(--mono);font-size:11.5px;background:var(--panel2);
+  padding:1px 5px;border-radius:2px}
+
+.src{display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+  background:var(--panel);border:1px solid var(--rule);border-radius:4px;
+  padding:12px 14px;margin-bottom:14px}
+.src input[type=url]{flex:1;min-width:180px;font-family:var(--mono);font-size:12px;
+  padding:7px 10px;background:var(--panel2);border:1px solid var(--rule);
+  color:var(--text);border-radius:3px}
+.src input[type=url]:focus{outline:2px solid var(--amber);outline-offset:-1px}
+button{font-family:var(--mono);font-size:12px;padding:7px 14px;
+  border:1px solid var(--amber-d);background:var(--glass);color:var(--amber);
+  border-radius:3px;cursor:pointer;white-space:nowrap}
+button:hover:not(:disabled){background:var(--amber);color:var(--ink)}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button.rec{border-color:var(--gate);color:var(--gate);background:rgba(224,87,79,.08)}
+button.rec:hover:not(:disabled){background:var(--gate);color:#fff}
+label.file{display:inline-block}
+label.file input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+label.file span{font-family:var(--mono);font-size:12px;padding:7px 14px;
+  border:1px solid var(--amber-d);background:var(--glass);color:var(--amber);
+  border-radius:3px;cursor:pointer;display:inline-block}
+label.file:hover span{background:var(--amber);color:var(--ink)}
+label.file:focus-within span{outline:2px solid var(--amber);outline-offset:2px}
+
+.controls{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px}
+.grp{display:flex;flex-direction:column;gap:5px}
+.lbl{font-family:var(--mono);font-size:10px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--dim)}
+.seg{display:flex;border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.seg button{border:0;border-right:1px solid var(--rule);background:var(--panel);
+  color:var(--dim);border-radius:0}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--glass);color:var(--amber);font-weight:600}
+
+.stage{display:grid;grid-template-columns:290px 1fr;gap:18px;align-items:start}
+@media (max-width:840px){.stage{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;padding:15px}
+.card h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--dim);margin:0 0 11px;font-weight:600}
+#tubes{display:block;width:250px;max-width:100%;height:auto;margin:0 auto}
+.tubelbl{display:flex;justify-content:space-around;max-width:250px;margin:8px auto 0;
+  font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.06em}
+#spec{display:block;width:100%;height:auto;max-width:720px}
+.axis{display:flex;justify-content:space-between;font-family:var(--mono);
+  font-size:9.5px;color:var(--dim);margin-top:5px}
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));
+  gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:3px;
+  overflow:hidden;margin-top:14px}
+.cell{background:var(--panel);padding:8px 10px}
+.cell .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--dim);display:block;margin-bottom:2px}
+.cell .v{font-family:var(--mono);font-size:16px;font-weight:600;
+  font-variant-numeric:tabular-nums}
+.cell .v.on{color:var(--lock)} .cell .v.off{color:var(--dim)}
+.cell .v.warn{color:var(--gate)} .cell .v.amber{color:var(--amber)}
+#status{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-top:12px;
+  min-height:1.4em}
+#status.err{color:var(--gate)}
+footer{margin-top:24px;padding-top:14px;border-top:1px solid var(--rule);
+  font-size:12.5px;color:var(--dim)}
+footer code{font-family:var(--mono);font-size:11.5px}
+footer p{margin:0 0 7px}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>氛围灯算法模拟器</h1>
+  <span class="sub"><span class="dot" id="dot"></span><span id="conn">未连接</span></span>
+  <span class="sub">96 灯 · 2×48 · 22.05 kHz</span>
+  <span class="link" id="where"></span>
+</header>
+
+<div class="note">
+  <b>算法在服务端跑。</b>页面只负责采音频，PCM 通过 WebSocket 送到服务器，
+  由 <code>liblamp</code>（就是 <code>usermods/lamp</code> 那批头文件编译的）分析后回传。
+  <b>连灯效的 96 个 RGB 也是 C++ 渲染的</b>，页面只把十六进制串画出来——
+  这一版没有任何算法在浏览器里重写。
+</div>
+
+<div class="src">
+  <label class="file"><input type="file" id="file" accept="audio/*">
+    <span>选择音频文件</span></label>
+  <input type="url" id="url" placeholder="或粘贴音频直链（需对方允许跨域）">
+  <button id="load">加载链接</button>
+  <button id="mic" class="rec">开启麦克风</button>
+  <button id="stop" disabled>停止</button>
+</div>
+
+<div class="controls">
+  <div class="grp"><span class="lbl">灯效</span>
+    <div class="seg" id="fx">
+      <button data-v="0" aria-pressed="true">频段柱</button>
+      <button data-v="1">拍点脉冲</button>
+      <button data-v="2">电平扫描</button>
+    </div></div>
+  <div class="grp"><span class="lbl">白平衡</span>
+    <div class="seg" id="wb">
+      <button data-v="1" aria-pressed="true">开</button><button data-v="0">关</button>
+    </div></div>
+  <div class="grp"><span class="lbl">档位</span>
+    <div class="seg" id="ps">
+      <button data-v="-1" aria-pressed="true">自动</button>
+      <button data-v="0">氛围</button><button data-v="1">通用</button>
+      <button data-v="2">电子</button><button data-v="3">打点</button>
+    </div></div>
+</div>
+
+<div class="stage">
+  <div class="card">
+    <h2>灯管 · C++ 渲染</h2>
+    <canvas id="tubes" width="250" height="420"></canvas>
+    <div class="tubelbl"><span>S1 · 左 · 0–47</span><span>S2 · 右 · 48–95</span></div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>16 段能量 · AGC 后</h2>
+      <canvas id="spec" width="720" height="180"></canvas>
+      <div class="axis"><span>43</span><span>130</span><span>430</span><span>1.1k</span>
+        <span>2.4k</span><span>4.5k</span><span>9.3k Hz</span></div>
+    </div>
+    <div class="read" id="read"></div>
+    <div id="status">等待音频输入</div>
+  </div>
+</div>
+
+<footer>
+  <p><b>麦克风需要安全上下文。</b>用 <code>http://localhost:8080</code> 打开，
+  或做端口转发：<code>ssh -L 8080:localhost:8080 macbook-m4-max</code>。
+  直接访问 <code>http://10.147.20.3:8080</code> 时浏览器会静默拒绝麦克风权限——
+  文件与链接不受影响。</p>
+  <p>音频统一重采样到 22.05 kHz 单声道后送出，与固件的采样率一致。</p>
+</footer>
+</div>
+
+<script>
+const SR=22050, NB=16, NLED=48;
+const PRESETS=["氛围/古典","通用","电子/鼓机","极限打点"];
+let ws=null, ac=null, node=null, stream=null, srcNode=null, playing=false;
+
+const $=id=>document.getElementById(id);
+const dot=$("dot"), conn=$("conn"), status=$("status");
+$("where").textContent=location.origin;
+
+function say(m,err){ status.textContent=m; status.className=err?"err":""; }
+function setConn(up,label){ dot.className="dot"+(up?" up":""); conn.textContent=label; }
+
+// ── WebSocket ─────────────────────────────────────────────
+function connect(){
+  return new Promise((res,rej)=>{
+    if(ws&&ws.readyState===1) return res(ws);
+    const proto=location.protocol==="https:"?"wss":"ws";
+    ws=new WebSocket(`${proto}://${location.host}/ws`);
+    ws.binaryType="arraybuffer";
+    ws.onopen=()=>{ setConn(true,"已连接"); pushCfg(); res(ws); };
+    ws.onclose=()=>{ setConn(false,"已断开"); };
+    ws.onerror=()=>{ setConn(false,"连接失败"); rej(new Error("WebSocket 连接失败")); };
+    ws.onmessage=e=>{ try{ (JSON.parse(e.data)||[]).forEach(paint); }catch(_){} };
+  });
+}
+function pushCfg(){
+  if(ws&&ws.readyState===1)
+    ws.send(JSON.stringify({fx:cfg.fx, wb:cfg.wb, preset:cfg.ps}));
+}
+const cfg={fx:0,wb:1,ps:-1};
+
+// ── 重采样到 22.05k 单声道 ────────────────────────────────
+function toMono22k(buf){
+  const n=Math.floor(buf.duration*SR), out=new Float32Array(n);
+  const ch=buf.numberOfChannels, ratio=buf.sampleRate/SR;
+  const src=[]; for(let c=0;c<ch;c++) src.push(buf.getChannelData(c));
+  for(let i=0;i<n;i++){
+    const p=i*ratio, j=p|0, t=p-j;
+    let v=0;
+    for(let c=0;c<ch;c++){
+      const a=src[c][j]||0, b=src[c][j+1]!==undefined?src[c][j+1]:a;
+      v+=a*(1-t)+b*t;
+    }
+    out[i]=v/ch;
+  }
+  return out;
+}
+
+// 按真实时间把 PCM 分块送出，服务端才能像收麦克风一样处理。
+async function playBuffer(pcm){
+  await connect();
+  stopAll(false);
+  playing=true; $("stop").disabled=false;
+  const CH=2048;                       // 约 93ms 一块
+  let pos=0;
+  const t0=performance.now();
+  say(`播放中 · ${(pcm.length/SR).toFixed(1)}s`);
+  while(playing && pos<pcm.length){
+    const end=Math.min(pos+CH,pcm.length);
+    if(ws.readyState!==1) break;
+    ws.send(pcm.subarray(pos,end).buffer.slice(
+      pcm.subarray(pos,end).byteOffset, undefined));
+    pos=end;
+    const due=t0+pos/SR*1000;
+    const wait=due-performance.now();
+    if(wait>0) await new Promise(r=>setTimeout(r,wait));
+  }
+  if(playing) say("播放结束");
+  playing=false; $("stop").disabled=true;
+}
+
+// ── 输入源 ────────────────────────────────────────────────
+async function decode(arrbuf,label){
+  ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+  say(`解码 ${label} …`);
+  const buf=await ac.decodeAudioData(arrbuf);
+  say(`${label} · ${buf.numberOfChannels}ch ${buf.sampleRate}Hz ${buf.duration.toFixed(1)}s → 重采样`);
+  return toMono22k(buf);
+}
+$("file").onchange=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  try{ playBuffer(await decode(await f.arrayBuffer(), f.name)); }
+  catch(err){ say("读不了这个文件："+err.message,true); }
+};
+$("load").onclick=async ()=>{
+  const u=$("url").value.trim(); if(!u) return say("先填一个音频直链",true);
+  try{
+    say("下载中 …");
+    const r=await fetch(u,{mode:"cors"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    playBuffer(await decode(await r.arrayBuffer(), "链接音频"));
+  }catch(err){
+    say("下载失败："+err.message+"（多半是对方没开 CORS，可先下载再用文件方式）",true);
+  }
+};
+$("mic").onclick=async ()=>{
+  if(!window.isSecureContext){
+    return say("当前不是安全上下文，浏览器会拒绝麦克风。用 localhost 打开或做端口转发",true);
+  }
+  try{
+    await connect();
+    stopAll(false);
+    stream=await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+    ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+    if(ac.state==="suspended") await ac.resume();
+    srcNode=ac.createMediaStreamSource(stream);
+    // ScriptProcessor 已废弃但零依赖且到处都能用；这是台调试工具，够了
+    node=ac.createScriptProcessor(4096,1,1);
+    const ratio=ac.sampleRate/SR;
+    node.onaudioprocess=ev=>{
+      if(!ws||ws.readyState!==1) return;
+      const inp=ev.inputBuffer.getChannelData(0);
+      const n=Math.floor(inp.length/ratio), out=new Float32Array(n);
+      for(let i=0;i<n;i++){
+        const p=i*ratio, j=p|0, t=p-j;
+        const a=inp[j]||0, b=inp[j+1]!==undefined?inp[j+1]:a;
+        out[i]=a*(1-t)+b*t;
+      }
+      ws.send(out.buffer);
+    };
+    srcNode.connect(node); node.connect(ac.destination);
+    playing=true; $("stop").disabled=false;
+    say(`麦克风开启 · 输入 ${ac.sampleRate}Hz → 重采样到 ${SR}Hz`);
+  }catch(err){ say("打不开麦克风："+err.message,true); }
+};
+function stopAll(msg=true){
+  playing=false;
+  if(node){ try{node.disconnect()}catch(_){} node.onaudioprocess=null; node=null; }
+  if(srcNode){ try{srcNode.disconnect()}catch(_){} srcNode=null; }
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  $("stop").disabled=true;
+  if(msg) say("已停止");
+}
+$("stop").onclick=()=>stopAll();
+
+// ── 绘制 ──────────────────────────────────────────────────
+const tc=$("tubes"),tx=tc.getContext("2d"),sc=$("spec"),sx=sc.getContext("2d");
+const dpr=Math.min(devicePixelRatio||1,2);
+for(const c of [tc,sc]){const w=c.width,h=c.height;
+  c.width=w*dpr;c.height=h*dpr;c.style.width=w+"px";c.style.height=h+"px";
+  c.getContext("2d").scale(dpr,dpr);}
+
+function drawTubes(hex){
+  const W=250,H=420; tx.clearRect(0,0,W,H);
+  const r=5, gap=(H-30)/(NLED-1);
+  const cs=getComputedStyle(document.documentElement).getPropertyValue("--rule");
+  for(let s=0;s<2;s++){
+    const cx=s?168:82;
+    tx.strokeStyle=cs; tx.lineWidth=1;
+    tx.beginPath(); tx.roundRect(cx-10.5,8,21,H-16,10.5); tx.stroke();
+    for(let i=0;i<NLED;i++){
+      const o=(s*NLED+i)*6;
+      const R=parseInt(hex.substr(o,2),16), G=parseInt(hex.substr(o+2,2),16),
+            B=parseInt(hex.substr(o+4,2),16);
+      const cy=H-15-i*gap, lum=(R+G+B)/765;
+      if(lum>.02){
+        const gr=tx.createRadialGradient(cx,cy,0,cx,cy,r*3.3);
+        gr.addColorStop(0,`rgba(${R},${G},${B},${.5*lum})`);
+        gr.addColorStop(1,"rgba(0,0,0,0)");
+        tx.fillStyle=gr; tx.beginPath(); tx.arc(cx,cy,r*3.3,0,7); tx.fill();
+      }
+      tx.fillStyle=`rgb(${R},${G},${B})`;
+      tx.beginPath(); tx.arc(cx,cy,r,0,7); tx.fill();
+    }
+  }
+}
+function hsv(h,s,v){h-=Math.floor(h);
+  const c=v*s,x=c*(1-Math.abs((h*6)%2-1)),m=v-c,g=Math.floor(h*6)%6;
+  let r,gg,b;
+  if(g===0){r=c;gg=x;b=0}else if(g===1){r=x;gg=c;b=0}else if(g===2){r=0;gg=c;b=x}
+  else if(g===3){r=0;gg=x;b=c}else if(g===4){r=x;gg=0;b=c}else{r=c;gg=0;b=x}
+  return[(r+m)*255|0,(gg+m)*255|0,(b+m)*255|0];}
+function drawSpec(b){
+  const W=720,H=180; sx.clearRect(0,0,W,H);
+  sx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue("--rule");
+  sx.lineWidth=1;
+  for(let g=1;g<4;g++){const y=H*g/4;sx.beginPath();sx.moveTo(0,y+.5);sx.lineTo(W,y+.5);sx.stroke();}
+  const bw=W/NB;
+  for(let i=0;i<NB;i++){
+    const e=Math.min(1,Math.max(0,b[i]*6)), h=e*e*(H-8);
+    const[R,G,B]=hsv(i/NB,.85,.95);
+    sx.fillStyle=`rgba(${R},${G},${B},.85)`;
+    sx.fillRect(i*bw+3,H-h,bw-6,h);
+  }
+}
+const CELLS=[["BPM",f=>f.bpm.toFixed(1),f=>f.lk?"on":"off"],
+ ["置信度",f=>f.conf.toFixed(2),f=>f.conf>.35?"on":"off"],
+ ["锁定",f=>f.lk?"YES":"NO",f=>f.lk?"on":"off"],
+ ["相位",f=>f.ph.toFixed(2),f=>f.lk?"amber":"off"],
+ ["档位",f=>PRESETS[f.ps],()=>"amber"],
+ ["AGC",f=>"×"+f.g.toFixed(1),()=>""],
+ ["门限",f=>f.gt?"GATE":"—",f=>f.gt?"warn":"off"],
+ ["起音/秒",f=>f.rate.toFixed(1),()=>""],
+ ["质心",f=>(f.cen/1000).toFixed(2)+"k",()=>""],
+ ["平坦度",f=>f.flat.toFixed(2),()=>""]];
+$("read").innerHTML=CELLS.map(c=>
+  `<div class="cell"><span class="k">${c[0]}</span><span class="v">—</span></div>`).join("");
+const vals=[...$("read").querySelectorAll(".v")];
+let pending=null, scheduled=false;
+function paint(f){
+  pending=f;
+  if(scheduled) return;                 // 服务端一次可能回一批，只画最后一帧
+  scheduled=true;
+  requestAnimationFrame(()=>{
+    scheduled=false;
+    const g=pending; if(!g) return;
+    drawTubes(g.px); drawSpec(g.b);
+    CELLS.forEach((c,i)=>{vals[i].textContent=c[1](g); vals[i].className="v "+c[2](g);});
+  });
+}
+function segify(id,fn){
+  $(id).onclick=e=>{const b=e.target.closest("button"); if(!b)return;
+    [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",x===b));
+    fn(+b.dataset.v); pushCfg();};
+}
+segify("fx",v=>cfg.fx=v); segify("wb",v=>cfg.wb=v); segify("ps",v=>cfg.ps=v);
+drawTubes("0".repeat(96*6));
+connect().catch(()=>say("连不上服务器，确认 server.py 在跑",true));
+</script>
