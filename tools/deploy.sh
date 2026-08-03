@@ -8,8 +8,11 @@
 # 失败就整体重来，不会留下半个文件。
 set -e
 cd "$(dirname "$0")/.."
-HOST=${HOST:-macbook-m4-max}
-DEST=${DEST:-'~/workspace/codex-deployments/lamp-sim'}
+# 主机与路径都从环境变量取，**不写死在仓库里**：
+#   IP 会变、别名不会，而别名归 PersonalServices 的 inventory 管。
+#   查目标：deploy/inventory/targets.json
+HOST=${LAMP_HOST:?请先设置 LAMP_HOST（PersonalServices 里的规范 SSH 别名）}
+DEST=${LAMP_DEST:-'~/lamp-sim'}
 TRIES=${TRIES:-5}
 
 FILES="usermods/lamp tools/lamp_capi.cpp tools/lamp_fft.h tools/server.py
@@ -30,5 +33,5 @@ while [ $i -le $TRIES ]; do
   i=$((i + 1))
   [ $i -le $TRIES ] && sleep 5
 done
-echo "连续 $TRIES 次失败 —— 确认 20.3 在线（ping 10.147.20.3）后重试" >&2
+echo "连续 $TRIES 次失败 —— 先确认 $HOST 在线（PersonalServices 的 preflight.py）" >&2
 exit 1
