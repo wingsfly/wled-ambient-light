@@ -6,6 +6,18 @@ workspace `~/workspace/codex-deployments/lamp-sim`，
 
 ## 部署
 
+一条命令（带重试，推荐）：
+
+```bash
+./tools/deploy.sh
+```
+
+它用 tar over ssh 而不是 rsync/scp —— 后两者在这条 ZeroTier 链路上经常
+中途 `Connection closed`（RTT 200ms+ 且时通时断）。tar 管道一次成型，
+失败就整体重来，不会留下半个文件。
+
+手工版：
+
 ```bash
 cd /Users/hjma/workspace/iflytek/wled-ambient-light
 D=~/workspace/codex-deployments/lamp-sim
