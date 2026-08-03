@@ -125,12 +125,16 @@ inline float perceptual(float e) {
 
 // 频段柱：把 16 段铺满一根管，色相按段号走色轮，亮度按该段能量。
 // 两根管镜像，这样从正面看是对称的。
+// 亮度里的 dynamics 因子是**给古典用的**。AGC 已经把 bands 的绝对电平抹平，
+// 只剩形状；乘回 dynamics，pp 与 ff 的差别才回得来。
+// 压得死的流行/电子上 dynamics 恒接近 1，等于没这一项。
 inline void fxSpectrumBars(const AudioFrame &f, const Geometry &g, Rgb *out) {
+    const float dyn = isfinite(f.dynamics) ? clamp01(f.dynamics) : 1.0f;
     for (int s = 0; s < 2; ++s) {
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
             const float u   = (float)i / (float)(LEDS_PER_TUBE - 1);
             const int   band = (int)(u * (NUM_BANDS - 1) + 0.5f);
-            const float e    = perceptual(f.bands[band] * kFxBandScale);
+            const float e    = perceptual(f.bands[band] * kFxBandScale) * dyn;
             out[mapPixel(g, (Side)s, u)] = hsv((float)band / NUM_BANDS, 0.9f, e);
         }
     }
@@ -365,6 +369,7 @@ inline void fxBeatRunner(const FxState &st, const FxConfig &c, const AudioFrame 
 }
 
 // 低频从底往上、高频从顶往下，在中间相遇。看的是频谱重心怎么移动。
+// 同样乘 dynamics，理由见 fxSpectrumBars。
 inline void fxSplitBands(const FxState &st, const AudioFrame &f,
                          const Geometry &g, Rgb *out) {
     float lo = 0.0f, hi = 0.0f;
@@ -390,14 +395,29 @@ inline void fxKeyWash(const FxState &st, const AudioFrame &f,
                       const Geometry &g, Rgb *out) {
     const float lvl = perceptual(f.rms_fast * kFxLevelScale);
     if (lvl <= 0.0f) return;
-    // 调性不明时（打击乐、噪声）降饱和度，别硬凑一个颜色出来
-    const float sat = 0.35f + 0.5f * clamp01(f.key_conf);
+
+    // 调性不明时**退回质心色相**，而不是单纯把饱和度压掉。
+    //
+    // 失真吉他是典型场景：power chord 没有三度、泛音又密，key_conf 一直很低。
+    // 原来的做法（只降饱和）在整首摇滚上都是一片灰白 —— 判断是对的
+    // （它诚实地说「我不确定」），但视觉上等于什么都没表达。
+    //
+    // st.hue 本来就跟着频谱质心走，那是个在失真下依然稳定、依然与音乐相关的量。
+    // 按 key_conf 在两者之间插值：调明确时听调的，调不明确时听音色的。
+    const float kc  = clamp01(f.key_conf);
+    // 色相插值走**最短弧**，直接线性插会在 0/1 接缝处绕一整圈
+    float d = st.key_hue - st.hue;
+    d -= floorf(d + 0.5f);
+    const float base_hue = st.hue + kc * d;
+    // 饱和度不再随 key_conf 塌到底，只是略降 —— 因为现在退路本身也是有意义的颜色
+    const float sat = 0.62f + 0.28f * kc;
+
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
             const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
             // 和声变化的波纹沿管跑一趟
             const float w = st.flash * expf(-fabsf(u - st.flash) * 6.0f);
-            const float hue = st.key_hue + 0.08f * w;
+            const float hue = base_hue + 0.08f * w;
             out[mapPixel(g, (Side)s, u)] = hsv(hue, sat, clamp01(lvl + 0.45f * w));
         }
 }

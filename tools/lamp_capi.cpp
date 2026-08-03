@@ -15,6 +15,7 @@
 #include <new>
 
 #include "lamp_fx.h"
+#include "lamp_auto.h"
 #include "lamp_fft.h"
 
 using namespace lamp;
@@ -28,8 +29,10 @@ struct LampFrameC {
     float chroma[kChroma];
     float bpm, conf, phase, rms, peak, gain, rate, centroid, flatness;
     float key_conf, harmony;
-    float f0, f0_conf, mood, trend, novelty;
+    float f0, f0_conf, mood, trend, novelty, dynamics, percussive, bar_conf;
+    float bands_h[NUM_BANDS], bands_p[NUM_BANDS];
     int32_t lock, gate, onset, preset, key_root, key_major, f0_voiced, section;
+    int32_t bpb, bar_pos, bar_index, downbeat, auto_fx;
     uint8_t px[TOTAL_LEDS * 3];      // C++ 效果层渲染的 96 个 RGB
 };
 
@@ -40,6 +43,9 @@ struct LampHandle {
     FxId           fx = FX_SPECTRUM_BARS;
     FxState        fxst;
     FxConfig       fxcfg;
+    bool           auto_mode = false;
+    AutoState      autost;
+    AutoConfig     autocfg;
     bool           white_balance = true;
     float          in_gain = 1.0f;   // 送进管线前的手动增益，补偿麦克风远近
 
@@ -55,6 +61,7 @@ void *lamp_create(void) {
     LampHandle *h = new (std::nothrow) LampHandle();
     if (!h) return nullptr;
     if (!pipelineInit(h->p, h->c, STYLE_GENERAL)) { delete h; return nullptr; }
+    autoInit(h->autost, h->autocfg, presetHopMs(STYLE_GENERAL));
     h->ring.assign(kMaxFftLen * 2, 0.0f);
     h->re.assign(kMaxFftLen, 0.0f);
     h->im.assign(kMaxFftLen, 0.0f);
@@ -69,7 +76,10 @@ void lamp_destroy(void *hv) { delete static_cast<LampHandle *>(hv); }
 void lamp_set_effect(void *hv, int32_t fx, int32_t white_balance) {
     LampHandle *h = static_cast<LampHandle *>(hv);
     if (!h) return;
-    if (fx >= 0 && fx < FX_COUNT) h->fx = (FxId)fx;
+    // fx < 0 → 自动模式。自动选择住在渲染层而不是管线里 ——
+    // 管线产出特征，「画哪个」是渲染层的决定（见 lamp_auto.h 的分层说明）。
+    if (fx < 0)                   h->auto_mode = true;
+    else if (fx < FX_COUNT)     { h->auto_mode = false; h->fx = (FxId)fx; }
     h->white_balance = white_balance != 0;
 }
 
@@ -141,6 +151,13 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         const uint32_t t_ms = (uint32_t)((double)h->consumed * 1000.0 / kSampleRate);
         const AudioFrame f = pipelineProcess(h->p, h->c, h->ring.data(),
                                              h->mag.data(), t_ms);
+        // 换档时自动选择器的时间常数也要跟着换 —— 它有一条 4 秒的
+        // f0 占比观察窗，按帧算的话各档会差 8 倍。
+        if (f.preset_changed) autoRetime(h->autost, h->autocfg, presetHopMs(f.preset));
+        if (h->auto_mode) {
+            autoUpdate(h->autost, h->autocfg, f, t_ms);
+            h->fx = h->autost.current;
+        }
         fxRender(h->fx, h->fxst, h->fxcfg, f, h->geo, h->white_balance,
                  (float)presetHopMs(h->p.style.current), h->px.data());
 
@@ -159,6 +176,13 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         o.f0 = f.f0_hz; o.f0_conf = f.f0_conf; o.f0_voiced = f.f0_voiced ? 1 : 0;
         o.mood = f.mood; o.trend = f.energy_trend;
         o.novelty = f.section_novelty; o.section = f.section_change ? 1 : 0;
+        o.dynamics = f.dynamics; o.percussive = f.percussive;
+        memcpy(o.bands_h, f.bands_h, sizeof(o.bands_h));
+        memcpy(o.bands_p, f.bands_p, sizeof(o.bands_p));
+        o.auto_fx = (int32_t)h->fx;
+        o.bar_conf = f.bar_conf;
+        o.bpb = f.beats_per_bar; o.bar_pos = f.bar_pos;
+        o.bar_index = f.bar_index; o.downbeat = f.downbeat ? 1 : 0;
         o.lock = f.beat_locked; o.gate = f.gated; o.onset = f.onset;
         o.preset = (int32_t)f.preset;
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i) {

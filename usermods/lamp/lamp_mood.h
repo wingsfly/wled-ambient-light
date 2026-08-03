@@ -56,6 +56,25 @@ struct MoodConfig {
 
     float mood_tau_ms = 5000.0f;    // 氛围标量自身的平滑
 
+    // ── 动态（AGC 旁路）──
+    //
+    // AGC 把响度差异抹平，这对「灯要一直看得见」是必要的，对古典却是灾难：
+    // pp 和 ff 被画成一样亮。而古典的信息**主要就在动态里**。
+    //
+    // 解法不是关掉 AGC，是把两件事分开：**AGC 负责形状（bands 的相对高低），
+    // dynamics 负责电平**。灯效用归一化的频段画形状、再整体乘 dynamics，
+    // 两者各司其职。
+    //
+    // 参考电平取长期峰值保持（瞬时攻击、60s 回落），dynamics 是当前响度相对
+    // 它的 dB 值映射到 [0,1]。这是个**比值**，所以与麦克风灵敏度无关 ——
+    // 它量的是「这一句相对这首曲子最响处有多轻」，不是绝对声压。
+    //
+    // 压得很死的流行/电子，dynamics 会一直贴近 1，等于没开这个功能；
+    // 古典才会真正用上它。自适应，不需要开关。
+    float dyn_range_db    = 40.0f;
+    float loud_ref_tau_ms = 60000.0f;
+    float dyn_tau_ms      = 250.0f;
+
     // mood 的三个分量各自的归一化上界与权重。
     float onset_full   = 6.0f;      // 每秒 6 个起音就算满
     float bright_lo_hz = 200.0f;
@@ -81,7 +100,11 @@ struct MoodState {
     float mood  = 0.0f;
     float trend = 0.0f;
 
+    float loud_ref = 0.0f;
+    float dynamics = 0.0f;   // [0,1]，1 = 与全曲最响处相当
+
     float a_short = 0.0f, a_long = 0.0f, a_pf = 0.0f, a_ps = 0.0f, a_mood = 0.0f;
+    float a_ref = 0.0f, a_dyn = 0.0f;
 };
 
 // 换档只换系数，**保留统计量** —— 与包络、AGC、节拍同一个道理。
@@ -92,6 +115,8 @@ inline void moodRetime(MoodState &s, const MoodConfig &c, float dt_ms) {
     s.a_pf    = envCoeff(c.profile_fast_tau_ms, dt_ms);
     s.a_ps    = envCoeff(c.profile_slow_tau_ms, dt_ms);
     s.a_mood  = envCoeff(c.mood_tau_ms,         dt_ms);
+    s.a_ref   = envCoeff(c.loud_ref_tau_ms,     dt_ms);
+    s.a_dyn   = envCoeff(c.dyn_tau_ms,          dt_ms);
 }
 
 inline void moodInit(MoodState &s, const MoodConfig &c, float dt_ms) {
@@ -155,6 +180,20 @@ inline void moodUpdate(MoodState &s, const MoodConfig &c,
     if (tr >  1.0f) tr =  1.0f;
     if (tr < -1.0f) tr = -1.0f;
     s.trend = tr;
+
+    // ── 动态 ──
+    // 参考电平：瞬时攻击、极慢回落。攻击必须是瞬时的 —— 慢慢爬的话
+    // 一段渐强会把自己当成参考，永远测不出「这里是最响的」。
+    if (rms_fast > s.loud_ref) s.loud_ref = rms_fast;
+    else                       s.loud_ref += s.a_ref * (rms_fast - s.loud_ref);
+    float dyn_t = 0.0f;
+    if (s.loud_ref > 1e-9f && rms_fast > 1e-12f) {
+        const float db = 20.0f * log10f(rms_fast / s.loud_ref);   // ≤ 0
+        dyn_t = 1.0f + db / ((c.dyn_range_db > 1.0f) ? c.dyn_range_db : 1.0f);
+        if (dyn_t > 1.0f) dyn_t = 1.0f;
+        if (dyn_t < 0.0f) dyn_t = 0.0f;
+    }
+    s.dynamics += s.a_dyn * (dyn_t - s.dynamics);
 
     // ── 段落 ──
     float prof[NUM_BANDS];
