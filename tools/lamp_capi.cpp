@@ -33,6 +33,8 @@ struct LampFrameC {
     float bands_h[NUM_BANDS], bands_p[NUM_BANDS];
     int32_t lock, gate, onset, preset, key_root, key_major, f0_voiced, section;
     int32_t bpb, bar_pos, bar_index, downbeat, auto_fx;
+    float auto_score[5];      // 自动选灯效的五个候选分数，排查用
+    float auto_duty, auto_jit, auto_perc, auto_split;
     uint8_t px[TOTAL_LEDS * 3];      // C++ 效果层渲染的 96 个 RGB
 };
 
@@ -180,6 +182,11 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         memcpy(o.bands_h, f.bands_h, sizeof(o.bands_h));
         memcpy(o.bands_p, f.bands_p, sizeof(o.bands_p));
         o.auto_fx = (int32_t)h->fx;
+        memcpy(o.auto_score, h->autost.score, sizeof(o.auto_score));
+        o.auto_duty = h->autost.f0_duty; o.auto_jit = h->autost.f0_jitter;
+        { const float e = h->autost.e_h + h->autost.e_p;
+          o.auto_perc = (e > 1e-12f) ? h->autost.e_p / e : 0.0f; }
+        o.auto_split = splitContrastOf(h->autost.e_ends, h->autost.e_mid);
         o.bar_conf = f.bar_conf;
         o.bpb = f.beats_per_bar; o.bar_pos = f.bar_pos;
         o.bar_index = f.bar_index; o.downbeat = f.downbeat ? 1 : 0;

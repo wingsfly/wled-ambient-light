@@ -74,7 +74,7 @@ struct AutoConfig {
     float lock_lo        = 0.35f;   // BPM 置信度低于此算「锁不上」
     float move_lo        = 0.35f;   // |走向| + 段落新颖度 超过此才算「结构活跃」
 
-    // **所有判据输入都在这个窗上做时间平均。**
+    // **所有判据输入都在这个窗上做时间平均 —— 一个都不能漏。**
     //
     // 逐帧的瞬时值不能用来选灯效。打击占比就是典型：鼓点帧 0.92、间隙 0.01，
     // 逐帧看的话 want 每几帧翻一次，`cand_since` 不断被重置，hold 永远凑不满 ——
@@ -82,6 +82,11 @@ struct AutoConfig {
     //
     // 单元测试没抓到：那些测试每帧喂的都是同一个常数，
     // 瞬时值与平均值恰好是同一个数（docs/17 第 20 条的形状）。
+    //
+    // **这句话一开始只做到了一半。** `key_conf` 与 `bpm_conf` 当时仍在用瞬时值，
+    // 而调性是每秒重估一次的、在摇滚上会在 0.27–1.00 之间摆 —— 于是同一段素材
+    // 喂 45 秒和 51 秒会得出不同的结论。那不是「本机与线上不一致」，
+    // 是**结果本身不可复现**。现在六个输入全部走同一个窗。
     float feature_tau_ms = 4000.0f;
 
     float margin   = 0.08f;         // 新候选要赢现任这么多才换（滞回）
@@ -103,6 +108,7 @@ struct AutoState {
     // **平均能量，不是平均比值** —— 见 autoUpdate
     float    e_h = 0.0f, e_p = 0.0f;        // 谐波 / 打击能量
     float    e_ends = 0.0f, e_mid = 0.0f;   // 两端 / 中段能量
+    float    key_avg = 0.0f, lock_avg = 0.0f;
     float    a_feat    = 0.0f;
     float    score[kAutoCands] = {0};
 };
@@ -171,10 +177,10 @@ inline float splitContrast(const float *bands) {
 // 不做任何流派命名。
 // 三个时间平均后的量由调用方传入 —— 让这个函数保持纯粹、可单独测。
 inline void autoScore(const AudioFrame &f, const AutoConfig &c,
-                      float f0_duty, float f0_jitter,
-                      float perc_avg, float split_avg, float *out) {
-    const float lock = clamp01(f.bpm_conf);
-    const float key  = clamp01(f.key_conf);
+                      float f0_duty, float f0_jitter, float perc_avg,
+                      float split_avg, float key_avg, float lock_avg, float *out) {
+    const float lock = clamp01(lock_avg);
+    const float key  = clamp01(key_avg);
     const float perc = clamp01(perc_avg);
     const float duty = clamp01(f0_duty);
 
@@ -250,7 +256,13 @@ inline bool autoUpdate(AutoState &s, const AutoConfig &c,
     s.e_mid  += s.a_feat * (mid  - s.e_mid);
     const float split_avg = splitContrastOf(s.e_ends, s.e_mid);
 
-    autoScore(f, c, s.f0_duty, s.f0_jitter, perc_avg, split_avg, s.score);
+    // 调性与节拍置信度同样要平均。调性是**每秒重估一次**的，摇滚上会在
+    // 0.27–1.00 之间摆；拿瞬时值打分等于让结论取决于「你恰好采到哪一秒」。
+    s.key_avg  += s.a_feat * (clamp01(f.key_conf) - s.key_avg);
+    s.lock_avg += s.a_feat * (clamp01(f.bpm_conf) - s.lock_avg);
+
+    autoScore(f, c, s.f0_duty, s.f0_jitter, perc_avg, split_avg,
+              s.key_avg, s.lock_avg, s.score);
 
     // 现任要被换掉，挑战者得**多赢一个 margin**。没有这道滞回的话，
     // 两个分数接近的候选会在 hold_ms 的边缘反复交替，永远凑不满驻留时间 ——

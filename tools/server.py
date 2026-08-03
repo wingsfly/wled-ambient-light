@@ -38,6 +38,9 @@ class Frame(C.Structure):
                 ("f0_voiced", C.c_int32), ("section", C.c_int32),
                 ("bpb", C.c_int32), ("bar_pos", C.c_int32),
                 ("bar_index", C.c_int32), ("downbeat", C.c_int32), ("auto_fx", C.c_int32),
+                ("auto_score", C.c_float * 5),
+                ("auto_duty", C.c_float), ("auto_jit", C.c_float),
+                ("auto_perc", C.c_float), ("auto_split", C.c_float),
                 ("px", C.c_uint8 * (NLED * 3))]
 
 def load():
@@ -164,6 +167,9 @@ def serve_ws(sock, lib):
                     "bp": [round(x, 4) for x in f.bands_p],
                     "bpb": f.bpb, "bpos": f.bar_pos, "bidx": f.bar_index, "bc": round(f.bar_conf, 3),
                     "db": f.downbeat, "afx": f.auto_fx,
+                    "asc": [round(x, 3) for x in f.auto_score],
+                    "ad": round(f.auto_duty, 3), "aj": round(f.auto_jit, 1),
+                    "ap": round(f.auto_perc, 3), "as": round(f.auto_split, 3),
                     "lk": f.lock, "gt": f.gate, "on": f.onset, "ps": f.preset,
                     "px": bytes(f.px).hex(),
                 })
