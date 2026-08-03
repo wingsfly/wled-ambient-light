@@ -36,6 +36,7 @@ struct LampHandle {
     Geometry       geo;
     FxId           fx = FX_SPECTRUM_BARS;
     bool           white_balance = true;
+    float          in_gain = 1.0f;   // 送进管线前的手动增益，补偿麦克风远近
 
     std::vector<float> ring;         // 样本累积区，长度至少一帧
     size_t             filled = 0;
@@ -65,6 +66,14 @@ void lamp_set_effect(void *hv, int32_t fx, int32_t white_balance) {
     if (!h) return;
     if (fx >= 0 && fx < FX_COUNT) h->fx = (FxId)fx;
     h->white_balance = white_balance != 0;
+}
+
+// 送进管线前的手动增益。麦克风离声源的远近能差一两个数量级，
+// AGC 的上限再高也不该指望它兜住全部 —— 给现场一个旋钮更实在。
+void lamp_set_input_gain(void *hv, float g) {
+    LampHandle *h = static_cast<LampHandle *>(hv);
+    if (!h || !isfinite(g) || g <= 0.0f) return;
+    h->in_gain = (g > 1000.0f) ? 1000.0f : g;
 }
 
 // 锁到某个档位；preset < 0 表示放开自动切换。
@@ -112,7 +121,11 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         }
         const size_t want = n - h->filled;
         const size_t take = ((size_t)(count - src) < want) ? (size_t)(count - src) : want;
-        memcpy(&h->ring[h->filled], pcm + src, take * sizeof(float));
+        if (h->in_gain == 1.0f) {
+            memcpy(&h->ring[h->filled], pcm + src, take * sizeof(float));
+        } else {
+            for (size_t i = 0; i < take; ++i) h->ring[h->filled + i] = pcm[src + i] * h->in_gain;
+        }
         h->filled += take; src += (int32_t)take;
         if (h->filled < n) break;
 

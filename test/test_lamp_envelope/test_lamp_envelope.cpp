@@ -306,15 +306,42 @@ void test_zero_squelch_does_not_produce_inf(void) {
 // 极轻的信号（want 远超 gain_max）不得让增益以远快于 release 的速度爬升。
 // 只断言「最终在界内」是不够的 —— 事后夹一次也能满足，但过程已经不是 release
 // 该有的样子了。
+//
+// 这条**显式压低 gain_max**，不用默认值。默认配置下 gain_max(250) 高于
+// target/squelch(125)，「want 超过上限」那个分支根本走不到 —— 那是有意的
+// （见下一条），但意味着这里必须自己造出可达的场景，否则测的是空气。
 void test_agc_release_rate_is_not_inflated_by_huge_want(void) {
     AgcConfig cfg;
+    cfg.gain_max = 20.0f;
+    cfg.squelch  = 0.0005f;      // 放低门限，让弱信号能走到增益那一段
     Agc g;
     agcInit(g, cfg, 10.0f);
-    // want = 0.25/0.0021 ≈ 119，是 gain_max 的三倍
+    // want = 0.25/0.0021 ≈ 119，是 gain_max 的六倍
     for (int k = 0; k < 100; ++k) agcUpdate(g, cfg, 0.0021f);   // 1 秒
-    // release τ=6s，1 秒后从 1.0 朝 40 走应只到 ~7；若 want 未夹则朝 119 走，到 ~19
-    TEST_ASSERT_TRUE_MESSAGE(g.gain < 12.0f, "增益爬升过快 —— want 未夹到 gain_max");
+    // release τ=6s，1 秒后从 1.0 朝 20 走应只到 ~4；若 want 未夹则朝 119 走，到 ~19
+    TEST_ASSERT_TRUE_MESSAGE(g.gain < 8.0f, "增益爬升过快 —— want 未夹到 gain_max");
     TEST_ASSERT_TRUE(g.gain <= cfg.gain_max);
+}
+
+// 默认配置必须满足 gain_max ≥ target/squelch。
+//
+// 违反它会造出一片「没被门限拦住、却又拉不到目标」的死区：信号明明还在，
+// AGC 顶格却够不着 target，频段能量始终偏低、灯几乎不亮。
+// 实测就撞上过 —— 手机节拍器对着笔记本麦克风，AGC 恒为 40.0（旧上限），
+// 而那时 target/squelch 是 125。
+void test_gain_max_covers_the_whole_ungated_range(void) {
+    const AgcConfig c;
+    const float need = c.target / c.squelch;
+    TEST_ASSERT_TRUE_MESSAGE(c.gain_max >= need,
+        "gain_max 低于 target/squelch —— 弱信号会卡在够不着目标的死区里");
+
+    // 正好在门限边缘的信号，收敛后应当真的到达 target
+    Agc g;
+    agcInit(g, c, 10.0f);
+    const float weak = c.squelch * 1.05f;
+    for (int k = 0; k < 20000; ++k) agcUpdate(g, c, weak);
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.05f * c.target, c.target, g.gain * weak,
+        "门限边缘的信号没能被拉到目标电平");
 }
 
 // 包络也必须拒绝负输入 —— 上一条测的是 AGC，两者是不同的函数。
@@ -402,6 +429,7 @@ int main(int, char **) {
     RUN_TEST(test_negative_rms_is_rejected);
     RUN_TEST(test_zero_squelch_does_not_produce_inf);
     RUN_TEST(test_agc_release_rate_is_not_inflated_by_huge_want);
+    RUN_TEST(test_gain_max_covers_the_whole_ungated_range);
     RUN_TEST(test_envelope_rejects_negative_rms);
     RUN_TEST(test_init_clears_a_dirty_object);
     RUN_TEST(test_retime_updates_all_three_coefficients);

@@ -39,6 +39,7 @@ def load():
     lib.lamp_destroy.argtypes = [C.c_void_p]
     lib.lamp_set_effect.argtypes = [C.c_void_p, C.c_int32, C.c_int32]
     lib.lamp_lock_preset.argtypes = [C.c_void_p, C.c_int32]
+    lib.lamp_set_input_gain.argtypes = [C.c_void_p, C.c_float]
     lib.lamp_sample_rate.restype = C.c_float
     lib.lamp_feed.argtypes = [C.c_void_p, C.POINTER(C.c_float), C.c_int32,
                               C.POINTER(Frame), C.c_int32]
@@ -118,6 +119,8 @@ def serve_ws(sock, lib):
                         lib.lamp_set_effect(h, int(m.get("fx", 0)), int(m.get("wb", 1)))
                     if "preset" in m:
                         lib.lamp_lock_preset(h, int(m["preset"]))
+                    if "ig" in m:
+                        lib.lamp_set_input_gain(h, C.c_float(float(m["ig"])))
                 except Exception:
                     pass
                 continue
