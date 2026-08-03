@@ -94,6 +94,19 @@ label.file:focus-within span{outline:2px solid var(--amber);outline-offset:2px}
 #status{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-top:12px;
   min-height:1.4em}
 #status.err{color:var(--gate)}
+#logwrap{margin-top:16px;background:var(--panel);border:1px solid var(--rule);
+  border-radius:4px;overflow:hidden}
+#loghdr{display:flex;align-items:center;gap:10px;padding:9px 13px;
+  border-bottom:1px solid var(--rule)}
+#loghdr h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--dim);margin:0;font-weight:600;flex:1}
+#loghdr button{padding:4px 10px;font-size:11px}
+#log{margin:0;padding:10px 13px;max-height:280px;overflow:auto;
+  font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--dim);
+  white-space:pre-wrap;word-break:break-all}
+#log .t{color:var(--amber)}
+#log .e{color:var(--gate)}
+#log .k{color:var(--lock)}
 footer{margin-top:24px;padding-top:14px;border-top:1px solid var(--rule);
   font-size:12.5px;color:var(--dim)}
 footer code{font-family:var(--mono);font-size:11.5px}
@@ -167,6 +180,15 @@ footer p{margin:0 0 7px}
   </div>
 </div>
 
+<div id="logwrap">
+  <div id="loghdr">
+    <h2>事件日志</h2>
+    <button id="logcopy">复制</button>
+    <button id="logclear">清空</button>
+  </div>
+  <pre id="log"></pre>
+</div>
+
 <footer>
   <p><b>麦克风需要安全上下文。</b>用 <code>http://localhost:8080</code> 打开，
   或做端口转发：<code>ssh -L 8080:localhost:8080 macbook-m4-max</code>。
@@ -183,6 +205,46 @@ let ws=null, ac=null, node=null, stream=null, srcNode=null, playing=false;
 let micAc=null, muteNode=null, hb=0, watchdog=0;    // 麦克风用独立的 AudioContext，见 openMic
 
 const $=id=>document.getElementById(id);
+
+// ── 事件日志 ──────────────────────────────────────────────
+// 麦克风的失败大多是静默的：回调不再触发、ctx 变了状态、track 被系统收走，
+// 全都不报错。把生命周期每一步和 2 秒一次的状态快照记下来，出问题时
+// 能直接看出停在哪一环，而不是靠猜。
+const T0=performance.now();
+const LOGMAX=600;
+let logLines=[];
+function lg(msg,cls){
+  const dt=(performance.now()-T0)/1000;
+  const ts=`${String(Math.floor(dt/60)).padStart(2,"0")}:${(dt%60).toFixed(3).padStart(6,"0")}`;
+  logLines.push(`[${ts}] ${msg}`);
+  if(logLines.length>LOGMAX) logLines=logLines.slice(-LOGMAX);
+  const el=$("log");
+  const near=el.scrollHeight-el.scrollTop-el.clientHeight<40;
+  el.innerHTML=logLines.map(l=>{
+    const m=l.match(/^(\[[^\]]+\])(.*)$/);
+    const body=(m?m[2]:l).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    return `<span class="t">${m?m[1]:""}</span>${body}`;
+  }).join("\n");
+  if(near) el.scrollTop=el.scrollHeight;
+  console.log("[sim]",msg);
+}
+function lgErr(m){ lg("✗ "+m); }
+function trackInfo(){
+  if(!stream) return "无 stream";
+  const t=stream.getAudioTracks()[0];
+  if(!t) return "无 audio track";
+  return `track="${t.label||"?"}" state=${t.readyState} enabled=${t.enabled} muted=${t.muted}`;
+}
+function snapshot(){
+  return `ws=${ws?ws.readyState:"null"} ac=${micAc?micAc.state:"null"} `
+       + `hb=${hb} sent=${nSent} recv=${nRecv} playing=${playing} | ${trackInfo()}`;
+}
+$("logcopy").onclick=()=>{
+  navigator.clipboard.writeText(logLines.join("\n"))
+    .then(()=>lg("日志已复制到剪贴板"))
+    .catch(()=>lg("复制失败，手动选中即可"));
+};
+$("logclear").onclick=()=>{ logLines=[]; $("log").textContent=""; };
 const dot=$("dot"), conn=$("conn"), status=$("status");
 $("where").textContent=location.origin;
 
@@ -192,18 +254,21 @@ function setConn(up,label){ dot.className="dot"+(up?" up":""); conn.textContent=
 // ── WebSocket ─────────────────────────────────────────────
 function connect(){
   return new Promise((res,rej)=>{
-    if(ws&&ws.readyState===1) return res(ws);
+    if(ws&&ws.readyState===1){ lg("WebSocket 复用已有连接"); return res(ws); }
+    lg(`WebSocket 新建（旧连接 readyState=${ws?ws.readyState:"null"}）`);
     const proto=location.protocol==="https:"?"wss":"ws";
     ws=new WebSocket(`${proto}://${location.host}/ws`);
     ws.binaryType="arraybuffer";
-    ws.onopen=()=>{ setConn(true,"已连接"); pushCfg(); res(ws); };
-    ws.onclose=()=>{
+    ws.onopen=()=>{ lg("WebSocket 已连接"); setConn(true,"已连接"); pushCfg(); res(ws); };
+    ws.onclose=ev=>{
+      lg(`WebSocket 关闭 code=${ev.code} reason="${ev.reason||""}" clean=${ev.wasClean}`);
       setConn(false,"已断开");
       // 正在采集时自动重连 —— 否则 onaudioprocess 会一直静默丢数据，
       // 页面看起来「不响应声音」而没有任何提示。
       if(playing) setTimeout(()=>connect().then(()=>say("已重连")).catch(()=>{}),1000);
     };
-    ws.onerror=()=>{ setConn(false,"连接失败"); rej(new Error("WebSocket 连接失败")); };
+    ws.onerror=()=>{ lgErr("WebSocket 出错"); setConn(false,"连接失败");
+                     rej(new Error("WebSocket 连接失败")); };
     ws.onmessage=e=>{
       try{ const a=JSON.parse(e.data)||[]; nRecv+=a.length; a.forEach(paint); io(); }
       catch(_){}
@@ -295,6 +360,7 @@ $("mic").onclick=async ()=>{
   if(!window.isSecureContext){
     return say("当前不是安全上下文，浏览器会拒绝麦克风。用 localhost 打开或做端口转发",true);
   }
+  lg("▶ 点击「开启麦克风」  "+snapshot());
   try{
     await connect();
     stopAll(false);
@@ -305,10 +371,18 @@ $("mic").onclick=async ()=>{
     // macOS 上 AudioContext 会进入 "interrupted"（系统抢占音频、息屏、省电都会），
     // 而 resume() 只救得回 "suspended"。复用一个坏掉的 ctx 就再也出不了声，
     // 而且没有任何报错 —— 表现正是「跑一两分钟后开关麦克风都没反应」。
+    lg("getUserMedia OK  "+trackInfo());
+    stream.getAudioTracks().forEach(t=>{
+      t.onended=()=>lgErr("track ended —— 设备被系统收走了");
+      t.onmute=()=>lgErr("track muted");
+      t.onunmute=()=>lg("track unmuted");
+    });
     micAc=new (window.AudioContext||window.webkitAudioContext)();
-    if(micAc.state!=="running") await micAc.resume();
+    lg(`AudioContext 新建 state=${micAc.state} sampleRate=${micAc.sampleRate}`);
+    if(micAc.state!=="running"){ await micAc.resume(); lg("resume 后 state="+micAc.state); }
     micAc.onstatechange=()=>{
       const st=micAc?micAc.state:"closed";
+      lg("AudioContext 状态变为 "+st);
       if(playing&&st!=="running") say(`音频上下文变为 ${st} —— 点「开启麦克风」重来`,true);
     };
 
@@ -318,6 +392,7 @@ $("mic").onclick=async ()=>{
     const ratio=micAc.sampleRate/SR;
     hb=0;
     node.onaudioprocess=ev=>{
+      if(hb===0) lg("首次 onaudioprocess，采集开始");
       hb++;
       if(!ws||ws.readyState!==1) return;
       const inp=ev.inputBuffer.getChannelData(0);
@@ -339,6 +414,7 @@ $("mic").onclick=async ()=>{
 
     nSent=nRecv=0; io();
     playing=true; $("stop").disabled=false;
+    lg(`采集就绪 ratio=${ratio.toFixed(3)} 块=4096→${Math.floor(4096/ratio)} 样本`);
     say(`麦克风开启 · 输入 ${micAc.sampleRate}Hz → 重采样到 ${SR}Hz`);
 
     // 看门狗：onaudioprocess 停了要说出来，而不是静默装死。
@@ -347,14 +423,19 @@ $("mic").onclick=async ()=>{
     watchdog=setInterval(()=>{
       if(!playing){ clearInterval(watchdog); return; }
       if(hb===last){
+        lgErr("采集停顿  "+snapshot());
         say(`采集已停止（音频上下文 ${micAc?micAc.state:"?"}）—— 点「开启麦克风」重来`,true);
         setConn(ws&&ws.readyState===1, ws&&ws.readyState===1?"已连接":"已断开");
+      } else {
+        lg("心跳  "+snapshot());
       }
       last=hb;
     },2000);
-  }catch(err){ say("打不开麦克风："+err.message,true); }
+  }catch(err){ lgErr("开启麦克风失败："+err.name+" "+err.message);
+               say("打不开麦克风："+err.message,true); }
 };
 function stopAll(msg=true){
+  if(msg||playing||node||stream||micAc) lg("■ stopAll  "+snapshot());
   playing=false;
   clearInterval(watchdog); watchdog=0;
   if(node){ try{node.disconnect()}catch(_){} node.onaudioprocess=null; node=null; }
@@ -363,11 +444,12 @@ function stopAll(msg=true){
   // 关掉麦克风的 ctx。留着它下次复用正是「开关都没反应」的成因。
   if(muteNode){ try{muteNode.disconnect()}catch(_){} muteNode=null; }
   if(micAc){ const c=micAc; micAc=null; c.onstatechange=null;
-             try{ c.close(); }catch(_){} }
+             c.close().then(()=>lg("AudioContext 已关闭"))
+                      .catch(e=>lgErr("close 失败："+e.message)); }
   $("stop").disabled=true;
   if(msg) say("已停止");
 }
-$("stop").onclick=()=>stopAll();
+$("stop").onclick=()=>{ lg("▶ 点击「停止」"); stopAll(); };
 
 // ── 绘制 ──────────────────────────────────────────────────
 const tc=$("tubes"),tx=tc.getContext("2d"),sc=$("spec"),sx=sc.getContext("2d");
