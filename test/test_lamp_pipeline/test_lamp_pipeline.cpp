@@ -185,6 +185,8 @@ static AudioFrame liveFrame(void){
     for (int i=0;i<kChroma;++i)  f.chroma[i]=(i%4==0)?0.9f:0.15f;
     f.rms_fast=0.4f; f.peak=0.6f; f.beat_locked=true; f.bpm=128.0f; f.phase=0.1f;
     f.key_root=0; f.key_conf=0.8f; f.centroid_hz=900.0f; f.harmony_move=0.1f;
+    f.f0_hz=330.0f; f.f0_conf=0.8f; f.f0_voiced=true;
+    f.mood=0.6f; f.energy_trend=0.3f; f.section_novelty=0.1f;
     return f;
 }
 
@@ -350,7 +352,7 @@ void test_impact_rejects_non_finite(void) {
 void test_all_effects_render(void) {
     Geometry g; FxState st; FxConfig c;
     const AudioFrame f = liveFrame();
-    TEST_ASSERT_EQUAL_INT_MESSAGE(8, (int)FX_COUNT, "效果数量变了，测试没跟上");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(10, (int)FX_COUNT, "效果数量变了，测试没跟上");
     for (int e = 0; e < FX_COUNT; ++e) {
         st = FxState{};
         for (int w = 0; w < 12; ++w) fxRender((FxId)e, st, c, f, g, true, 23.22f, g_px);
@@ -539,6 +541,148 @@ void test_harmony_smoothing_is_defined_in_physical_time(void) {
     TEST_ASSERT_TRUE_MESSAGE(got[0] > 0.15f, "harmony 必须真的爬起来了");
 }
 
+// ── 彩色流动 / 旋律线：证明它们真的在消费 mood 与 f0 ──
+
+// 跑 n 帧后取平均色相跨度：管两端的色相差多少
+static float hueSpread(FxState &st, const AudioFrame &f) {
+    Geometry g; Rgb px[TOTAL_LEDS];
+    for (int k = 0; k < 40; ++k) fxRender(FX_COLOR_FLOW, st, g_fxcfg, f, g, false, 23.22f, px);
+    const Rgb a = px[mapPixel(g, SIDE_L, 0.0f)];
+    const Rgb b = px[mapPixel(g, SIDE_L, 1.0f)];
+    // 用 RGB 差当色相差的代理 —— 同色相时三通道比例相同
+    const float da = fabsf((float)a.r - b.r) + fabsf((float)a.g - b.g) + fabsf((float)a.b - b.b);
+    return da;
+}
+
+void test_color_flow_hue_span_follows_the_mood(void) {
+    // 静：几乎单色的渐变；躁：整条彩虹。两端色差必须拉开。
+    AudioFrame calm = liveFrame(), wild = liveFrame();
+    calm.mood = 0.0f; wild.mood = 1.0f;
+    FxState a{}, b{};
+    const float s_calm = hueSpread(a, calm), s_wild = hueSpread(b, wild);
+    TEST_ASSERT_TRUE_MESSAGE(s_wild > s_calm + 60.0f,
+        "躁的时候色相跨度必须明显更宽");
+}
+
+void test_color_flow_direction_follows_the_energy_trend(void) {
+    // 渐强往上流、收尾往下流。相位在两个方向上必须朝相反方向走。
+    AudioFrame up = liveFrame(), down = liveFrame();
+    up.energy_trend = 1.0f; down.energy_trend = -1.0f;
+    Geometry g; Rgb px[TOTAL_LEDS];
+    FxState a{}, b{};
+    for (int k = 0; k < 30; ++k) {
+        fxRender(FX_COLOR_FLOW, a, g_fxcfg, up,   g, false, 23.22f, px);
+        fxRender(FX_COLOR_FLOW, b, g_fxcfg, down, g, false, 23.22f, px);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(a.flow > 0.0f && a.flow < 1.0f, "相位应当在 [0,1)");
+    // 渐强时相位前进、收尾时后退（后退会绕到接近 1）
+    TEST_ASSERT_TRUE_MESSAGE(a.flow != b.flow, "两个方向的相位不能相同");
+    float fwd = a.flow, bwd = b.flow; if (bwd > 0.5f) bwd -= 1.0f;
+    TEST_ASSERT_TRUE_MESSAGE(fwd > 0.0f && bwd < 0.0f,
+        "渐强应当正向流动、收尾应当反向流动");
+}
+
+void test_color_flow_speed_follows_the_bpm(void) {
+    AudioFrame slow = liveFrame(), fast = liveFrame();
+    slow.bpm = 80.0f; fast.bpm = 160.0f;
+    Geometry g; Rgb px[TOTAL_LEDS];
+    FxState a{}, b{};
+    for (int k = 0; k < 10; ++k) {
+        fxRender(FX_COLOR_FLOW, a, g_fxcfg, slow, g, false, 23.22f, px);
+        fxRender(FX_COLOR_FLOW, b, g_fxcfg, fast, g, false, 23.22f, px);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(b.flow > a.flow * 1.8f,
+        "BPM 翻倍，流动速度应当接近翻倍");
+}
+
+void test_color_flow_washes_out_on_a_section_change(void) {
+    AudioFrame f = liveFrame();
+    Geometry g; Rgb px[TOTAL_LEDS];
+    FxState st{};
+    for (int k = 0; k < 20; ++k) fxRender(FX_COLOR_FLOW, st, g_fxcfg, f, g, false, 23.22f, px);
+    const float before = st.sect;
+    f.section_change = true;
+    fxRender(FX_COLOR_FLOW, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_TRUE_MESSAGE(st.sect > before + 0.5f, "换段应当触发一次泛白");
+    f.section_change = false;
+    for (int k = 0; k < 200; ++k) fxRender(FX_COLOR_FLOW, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_TRUE_MESSAGE(st.sect < 0.05f, "泛白应当自己退下去");
+}
+
+// 旋律线光斑的中心位置（左管，0=底 1=顶）
+static float melodyCentroid(FxState &st, const AudioFrame &f) {
+    Geometry g; Rgb px[TOTAL_LEDS];
+    for (int k = 0; k < 30; ++k) fxRender(FX_MELODY_LINE, st, g_fxcfg, f, g, false, 23.22f, px);
+    float wsum = 0.0f, w = 0.0f;
+    for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+        const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+        const Rgb c = px[mapPixel(g, SIDE_L, u)];
+        const float e = (float)(c.r + c.g + c.b);
+        wsum += e * u; w += e;
+    }
+    return (w > 0.0f) ? wsum / w : -1.0f;
+}
+
+void test_melody_line_height_follows_the_pitch(void) {
+    AudioFrame lo = liveFrame(), hi = liveFrame();
+    lo.f0_hz = 110.0f; hi.f0_hz = 880.0f;
+    FxState a{}, b{};
+    const float ul = melodyCentroid(a, lo), uh = melodyCentroid(b, hi);
+    TEST_ASSERT_TRUE_MESSAGE(ul >= 0.0f && uh >= 0.0f, "两种音高都应当点亮些什么");
+    TEST_ASSERT_TRUE_MESSAGE(uh > ul + 0.3f, "音越高，光点越靠管顶");
+}
+
+void test_melody_line_maps_octaves_apart_unlike_chroma_ring(void) {
+    // 与音级环的分水岭：C3 和 C5 在音级环里是同一格，在这里相距半根管。
+    AudioFrame c3 = liveFrame(), c5 = liveFrame();
+    c3.f0_hz = 130.8f; c5.f0_hz = 523.3f;
+    FxState a{}, b{};
+    const float u3 = melodyCentroid(a, c3), u5 = melodyCentroid(b, c5);
+    TEST_ASSERT_TRUE_MESSAGE(u5 - u3 > 0.35f,
+        "相差两个八度的同一个音必须落在管上不同的位置");
+
+    // 正对照：同样这两个音，在音级环里应当落在同一格
+    FxState r3{}, r5{};
+    AudioFrame k3 = liveFrame(), k5 = liveFrame();
+    for (int i = 0; i < kChroma; ++i) { k3.chroma[i] = k5.chroma[i] = 0.05f; }
+    k3.chroma[0] = k5.chroma[0] = 1.0f;     // 都是 C
+    Geometry g; Rgb p3[TOTAL_LEDS], p5[TOTAL_LEDS];
+    for (int k = 0; k < 30; ++k) {
+        fxRender(FX_CHROMA_RING, r3, g_fxcfg, k3, g, false, 23.22f, p3);
+        fxRender(FX_CHROMA_RING, r5, g_fxcfg, k5, g, false, 23.22f, p5);
+    }
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
+        TEST_ASSERT_EQUAL_INT_MESSAGE(p3[i].r, p5[i].r,
+            "音级环把八度折叠掉了，两者应当完全一样");
+}
+
+void test_melody_line_leaves_a_trail_that_fades(void) {
+    AudioFrame f = liveFrame();
+    f.f0_hz = 440.0f;
+    FxState st{};
+    Geometry g; Rgb px[TOTAL_LEDS];
+    for (int k = 0; k < 30; ++k) fxRender(FX_MELODY_LINE, st, g_fxcfg, f, g, false, 23.22f, px);
+    const float peak = st.trail[(int)(st.f0_u * (LEDS_PER_TUBE - 1) + 0.5f)];
+    TEST_ASSERT_TRUE_MESSAGE(peak > 0.05f, "持续音应当点亮它所在的位置");
+
+    f.f0_voiced = false;
+    for (int k = 0; k < 60; ++k) fxRender(FX_MELODY_LINE, st, g_fxcfg, f, g, false, 23.22f, px);
+    const float after = st.trail[(int)(st.f0_u * (LEDS_PER_TUBE - 1) + 0.5f)];
+    TEST_ASSERT_TRUE_MESSAGE(after < peak * 0.2f, "音停了拖影应当淡下去");
+    TEST_ASSERT_TRUE_MESSAGE(after > 0.0f, "但不是一刀切黑");
+}
+
+void test_melody_line_is_dark_when_unvoiced_from_the_start(void) {
+    AudioFrame f = liveFrame();
+    f.f0_voiced = false; f.f0_hz = 0.0f;
+    FxState st{};
+    Geometry g; Rgb px[TOTAL_LEDS];
+    for (int k = 0; k < 30; ++k) fxRender(FX_MELODY_LINE, st, g_fxcfg, f, g, false, 23.22f, px);
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
+        TEST_ASSERT_TRUE_MESSAGE(px[i].r == 0 && px[i].g == 0 && px[i].b == 0,
+            "从没测到过音高时不该有拖影");
+}
+
 // 平滑必须按**物理时间**定义。各档 hop 从 5.8ms（打点）到 46.4ms（氛围）
 // 差 8 倍，如果系数写死成「每帧 0.25」，同一段音乐在两个档位的反应速度就差 8 倍：
 // 慢档还在爬升，快档早已收敛。
@@ -641,6 +785,14 @@ int main(int, char **) {
     RUN_TEST(test_key_wash_color_follows_the_key);
     RUN_TEST(test_key_wash_separates_major_from_minor);
     RUN_TEST(test_key_wash_desaturates_when_key_is_unclear);
+    RUN_TEST(test_color_flow_hue_span_follows_the_mood);
+    RUN_TEST(test_color_flow_direction_follows_the_energy_trend);
+    RUN_TEST(test_color_flow_speed_follows_the_bpm);
+    RUN_TEST(test_color_flow_washes_out_on_a_section_change);
+    RUN_TEST(test_melody_line_height_follows_the_pitch);
+    RUN_TEST(test_melody_line_maps_octaves_apart_unlike_chroma_ring);
+    RUN_TEST(test_melody_line_leaves_a_trail_that_fades);
+    RUN_TEST(test_melody_line_is_dark_when_unvoiced_from_the_start);
     RUN_TEST(test_harmony_smoothing_is_defined_in_physical_time);
     RUN_TEST(test_fx_smoothing_is_defined_in_physical_time);
     RUN_TEST(test_chroma_ring_maps_pitch_class_not_frequency);

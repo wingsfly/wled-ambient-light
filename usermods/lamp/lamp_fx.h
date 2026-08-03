@@ -31,7 +31,9 @@ enum FxId : uint8_t {
     FX_SPLIT_BANDS   = 5,
     FX_KEY_WASH      = 6,
     FX_CHROMA_RING   = 7,
-    FX_COUNT         = 8,
+    FX_COLOR_FLOW    = 8,
+    FX_MELODY_LINE   = 9,
+    FX_COUNT         = 10,
 };
 
 inline const char *fxName(FxId f) {
@@ -43,6 +45,8 @@ inline const char *fxName(FxId f) {
         case FX_SPLIT_BANDS: return "split-bands";
         case FX_KEY_WASH:    return "key-wash";
         case FX_CHROMA_RING: return "chroma-ring";
+        case FX_COLOR_FLOW:  return "color-flow";
+        case FX_MELODY_LINE: return "melody-line";
         case FX_SPECTRUM_BARS:
         default:             return "spectrum-bars";
     }
@@ -60,6 +64,12 @@ struct FxState {
     float runner = 0.0f;          // 光点位置 [0,1)
     float prev_phase = 0.0f;
     bool  has_phase = false;
+
+    float flow = 0.0f;            // 色相流动相位 [0,1)
+    float sect = 0.0f;            // 换段的余波
+    float f0_u = 0.5f;            // 旋律线在管上的位置，平滑后
+    bool  has_f0 = false;
+    float trail[LEDS_PER_TUBE] = {0};   // 旋律线的拖影
 };
 
 struct FxConfig {
@@ -69,6 +79,13 @@ struct FxConfig {
     float decay_beats   = 0.55f;
     float decay_free_ms = 260.0f;   // 没锁上节拍时的退路
     float runner_tail   = 0.28f;    // 光点拖尾长度，占管长的比例
+
+    // 彩色流动：一个完整色相环走过多少拍。四拍一圈，慢歌快歌都不至于晕。
+    float flow_beats    = 4.0f;
+    float flow_free_ms  = 2400.0f;  // 没锁上节拍时的退路
+    float sect_tau_ms   = 1200.0f;  // 换段余波的衰减
+    float trail_tau_ms  = 500.0f;   // 旋律线拖影的衰减
+    float f0_glide_ms   = 70.0f;    // 旋律线位置的平滑
 };
 
 // HSV→RGB，色相 [0,1)。特效常用色相环，写一次省得三处重复。
@@ -204,6 +221,62 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // 各档差 8 倍，写死成每帧固定值会让换档时观感突变。
     const float ac = envCoeff(kFxChromaTauMs, dt_ms);
     const float ah = envCoeff(kFxKeyHueTauMs, dt_ms);
+
+    // ── 彩色流动的相位 ──
+    //
+    // 速度不是常数，也不是简单地跟 BPM 成正比：
+    //   基础周期  = flow_beats 拍（锁不上节拍时退回固定毫秒）
+    //   氛围      越躁越快
+    //   能量走向  **可以为负** —— 渐强时往上流、收尾时往下流。
+    //
+    // 走向这一项刻意写成连续的（0.35 + trend），不是按符号切换方向：
+    // trend 在零附近来回时，按符号切会让整条光带反复抽搐。
+    const float beat_ms = (f.beat_locked && f.bpm > 1.0f) ? (60000.0f / f.bpm) : 0.0f;
+    const float cycle_ms = (beat_ms > 0.0f) ? beat_ms * c.flow_beats : c.flow_free_ms;
+    float mo = isfinite(f.mood) ? f.mood : 0.0f;
+    if (mo < 0.0f) mo = 0.0f; if (mo > 1.0f) mo = 1.0f;
+    float tr = isfinite(f.energy_trend) ? f.energy_trend : 0.0f;
+    if (tr < -1.0f) tr = -1.0f; if (tr > 1.0f) tr = 1.0f;
+    if (cycle_ms > 1.0f) {
+        st.flow += (dt_ms / cycle_ms) * (0.6f + 0.8f * mo) * (0.35f + tr);
+        st.flow -= floorf(st.flow);
+    }
+
+    // 换段的余波。section_change 只有一帧为真，直接画的话眨眼就没了。
+    const float as = envCoeff(c.sect_tau_ms, dt_ms);
+    if (f.section_change) st.sect = 1.0f;
+    else                  st.sect += as * (0.0f - st.sect);
+
+    // ── 旋律线 ──
+    // 位置按**半音**映射，不是按 Hz：Hz 线性映射会把低八度挤成一小段。
+    const float at = envCoeff(c.trail_tau_ms,  dt_ms);
+    const float ag = envCoeff(c.f0_glide_ms,   dt_ms);
+    if (f.f0_voiced && f.f0_hz > 0.0f) {
+        const float span = hzToSemi(1000.0f, 80.0f);            // 搜索范围的总跨度
+        float u = hzToSemi(f.f0_hz, 80.0f) / (span > 1.0f ? span : 1.0f);
+        if (u < 0.0f) u = 0.0f; if (u > 1.0f) u = 1.0f;
+        if (!st.has_f0) { st.f0_u = u; st.has_f0 = true; }
+        else            { st.f0_u += ag * (u - st.f0_u); }
+    }
+    for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i)
+        st.trail[i] += at * (0.0f - st.trail[i]);
+    if (f.f0_voiced) {
+        const int c0 = (int)(st.f0_u * (float)(LEDS_PER_TUBE - 1) + 0.5f);
+        float lvl = f.rms_fast * kFxLevelScale;
+        if (!isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
+        if (lvl > 1.0f) lvl = 1.0f;
+        const float v = lvl * (0.4f + 0.6f * f.f0_conf);
+        // 升余弦光斑而不是高斯：高斯的尾巴掉得太快，±4 处只剩 1.8%，
+        // 量化到 8 位就是黑的 —— 一个持续音在 48 颗管子上只亮 5 颗，
+        // 看着像坏了。升余弦在 ±4 处还有 9.5%，halo 是看得见的。
+        constexpr int kSpread = 4;
+        for (int d = -kSpread; d <= kSpread; ++d) {
+            const int i = c0 + d;
+            if (i < 0 || i >= (int)LEDS_PER_TUBE) continue;
+            const float w = v * 0.5f * (1.0f + cosf(3.14159265f * (float)d / (float)(kSpread + 1)));
+            if (w > st.trail[i]) st.trail[i] = w;
+        }
+    }
 
     // 色度平滑。单帧色度抖得厉害，直接画会闪成一片。
     for (int i = 0; i < kChroma; ++i) {
@@ -349,6 +422,62 @@ inline void fxChromaRing(const FxState &st, const AudioFrame &f,
         }
 }
 
+// 彩色流动：沿管连续变化的色相带，整体在流动。
+//
+// 这个效果是给**外壳透光**准备的 —— 真灯管的乳白外壳会把相邻灯珠糊成
+// 连续过渡，逐颗跳变的效果在那上面会损失掉一半信息，而连续色带正好相反。
+//
+// 三个音乐特征各管一件事，互不重叠：
+//   氛围 mood  → 色相跨度（静：几乎单色的渐变；躁：整条彩虹）与饱和度
+//   能量走向   → 流动方向与快慢（在 fxAdvance 里）
+//   换段       → 一次全管泛白，像翻页
+inline void fxColorFlow(const FxState &st, const AudioFrame &f,
+                        const Geometry &g, Rgb *out) {
+    float mo = isfinite(f.mood) ? f.mood : 0.0f;
+    if (mo < 0.0f) mo = 0.0f; if (mo > 1.0f) mo = 1.0f;
+    const float span = 0.10f + 0.80f * mo;      // 色相跨度
+    const float sat  = 0.45f + 0.50f * mo;
+
+    float lvl = f.rms_fast * kFxLevelScale;
+    if (!isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
+    if (lvl > 1.0f) lvl = 1.0f;
+
+    // 底色跟调性走，没调性时用色相流动自己的相位
+    const float base = (f.key_root >= 0 && f.key_conf > 0.15f)
+                     ? (float)f.key_root / (float)kChroma : st.key_hue;
+
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const float h = base + st.flow + span * u;
+            // 亮度必须**正比于**电平，不能带常数下限 —— 带下限的话静音时
+            // 整条管还亮着 0.30，「没声音就熄灯」这条验收直接不过。
+            const float v = lvl * (0.5f + 0.5f * lvl) * (0.85f + 0.15f * sinf(6.28318f * u));
+            out[mapPixel(g, (Side)s, u)] =
+                hsv(h, sat * (1.0f - 0.7f * st.sect), v + 0.6f * st.sect * (1.0f - v));
+        }
+}
+
+// 旋律线：一个光点停在主旋律当前的音高上，走过的地方留下拖影。
+//
+// 这是唯一消费 f0 的效果。与「音级环」的区别在于**八度**：音级环把
+// C3 和 C5 画在同一格，这里它们相距半根管 —— 旋律的起伏看得见。
+inline void fxMelodyLine(const FxState &st, const AudioFrame &f,
+                         const Geometry &g, Rgb *out) {
+    // 色相取当前音高的音级，于是同一个音无论在哪个八度都是同一个颜色
+    const int pc = f.f0_voiced ? pitchClassOf(f.f0_hz) : -1;
+    const float hue = (pc >= 0) ? (float)pc / (float)kChroma : st.key_hue;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const float e = st.trail[i];
+            if (!(e > 0.002f)) continue;
+            // 这里**不套 perceptual()**：拖影存的已经是亮度，不是能量。
+            // 再平方一次会把 halo 压成黑的，只剩一个孤零零的亮点。
+            out[mapPixel(g, (Side)s, u)] = hsv(hue, 0.85f, e);
+        }
+}
+
 // 统一入口。渲染后**统一施加白平衡** —— 各效果自己不碰它，
 // 否则总有一个会忘，而忘了的那个偏色，看起来像效果设计得难看。
 inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
@@ -363,6 +492,8 @@ inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &
         case FX_SPLIT_BANDS: fxSplitBands(st, f, g, out);    break;
         case FX_KEY_WASH:    fxKeyWash(st, f, g, out);       break;
         case FX_CHROMA_RING: fxChromaRing(st, f, g, out);    break;
+        case FX_COLOR_FLOW:  fxColorFlow(st, f, g, out);     break;
+        case FX_MELODY_LINE: fxMelodyLine(st, f, g, out);    break;
         case FX_SPECTRUM_BARS:
         default:             fxSpectrumBars(f, g, out);      break;
     }

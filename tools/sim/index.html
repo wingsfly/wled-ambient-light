@@ -158,7 +158,16 @@ footer p{margin:0 0 7px}
       <button data-v="5">高低分离</button>
       <button data-v="6">调性染色</button>
       <button data-v="7">音级环</button>
+      <button data-v="8">彩色流动</button>
+      <button data-v="9">旋律线</button>
     </div></div>
+  <div class="grp"><span class="lbl">灯管显示</span>
+    <div class="seg" id="dm">
+      <button data-v="1" aria-pressed="true">外壳透光</button><button data-v="0">裸灯珠</button>
+    </div></div>
+  <div class="grp"><span class="lbl">扩散半径 <span id="dfv">1.2 颗</span></span>
+    <input type="range" id="df" min="4" max="30" value="12" style="width:130px"
+           aria-label="扩散半径"></div>
   <div class="grp"><span class="lbl">白平衡</span>
     <div class="seg" id="wb">
       <button data-v="1" aria-pressed="true">开</button><button data-v="0">关</button>
@@ -559,28 +568,89 @@ for(const c of [tc,sc]){const w=c.width,h=c.height;
   c.width=w*dpr;c.height=h*dpr;c.style.width=w+"px";c.style.height=h+"px";
   c.getContext("2d").scale(dpr,dpr);}
 
+// 灯管绘制。两种模式：
+//
+// **裸灯珠** —— 一颗一个点，用来核对像素本身对不对。
+//
+// **外壳透光** —— 真机的乳白外壳会把相邻灯珠糊成连续过渡，逐颗跳变的画面
+// 在实物上根本不存在。这里按物理方式模拟：每颗灯珠是一个高斯光斑，
+// **加性**叠加（光就是这么合成的，不是 alpha 混合），再按沿管坐标重采样。
+//
+// 一并把三个通道分开卷积 —— 合成后的颜色是相邻灯珠颜色的能量加权平均，
+// 直接对 RGB 做 alpha 混合会得到偏暗、偏灰的结果。
+//
+// ⚠️ 扩散半径的默认值 1.2 颗**是猜的**。真机外壳的散射距离没有实测数据，
+// 所以做成可调，装机后按实物标定。
+let diffuse = 1.2, showDiffuse = true;
+const _acc = new Float32Array(NLED * 8 * 3);      // 8× 过采样的沿管累加缓冲
 function drawTubes(hex){
   const W=250,H=420; tx.clearRect(0,0,W,H);
-  const r=5, gap=(H-30)/(NLED-1);
+  const gap=(H-30)/(NLED-1);
   const cs=getComputedStyle(document.documentElement).getPropertyValue("--rule");
   for(let s=0;s<2;s++){
     const cx=s?168:82;
     tx.strokeStyle=cs; tx.lineWidth=1;
     tx.beginPath(); tx.roundRect(cx-10.5,8,21,H-16,10.5); tx.stroke();
+    if(!showDiffuse){
+      const r=5;
+      for(let i=0;i<NLED;i++){
+        const o=(s*NLED+i)*6;
+        const R=parseInt(hex.substr(o,2),16), G=parseInt(hex.substr(o+2,2),16),
+              B=parseInt(hex.substr(o+4,2),16);
+        const cy=H-15-i*gap, lum=(R+G+B)/765;
+        if(lum>.02){
+          const gr=tx.createRadialGradient(cx,cy,0,cx,cy,r*3.3);
+          gr.addColorStop(0,`rgba(${R},${G},${B},${.5*lum})`);
+          gr.addColorStop(1,"rgba(0,0,0,0)");
+          tx.fillStyle=gr; tx.beginPath(); tx.arc(cx,cy,r*3.3,0,7); tx.fill();
+        }
+        tx.fillStyle=`rgb(${R},${G},${B})`;
+        tx.beginPath(); tx.arc(cx,cy,r,0,7); tx.fill();
+      }
+      continue;
+    }
+    // 透光：每颗灯珠在 8× 过采样网格上摊开一个高斯，三通道各自加性叠加
+    const OS=8, N=NLED*OS;
+    _acc.fill(0,0,N*3);
+    const sigma=Math.max(0.05,diffuse)*OS;
+    const reach=Math.ceil(sigma*3);
     for(let i=0;i<NLED;i++){
       const o=(s*NLED+i)*6;
       const R=parseInt(hex.substr(o,2),16), G=parseInt(hex.substr(o+2,2),16),
             B=parseInt(hex.substr(o+4,2),16);
-      const cy=H-15-i*gap, lum=(R+G+B)/765;
-      if(lum>.02){
-        const gr=tx.createRadialGradient(cx,cy,0,cx,cy,r*3.3);
-        gr.addColorStop(0,`rgba(${R},${G},${B},${.5*lum})`);
-        gr.addColorStop(1,"rgba(0,0,0,0)");
-        tx.fillStyle=gr; tx.beginPath(); tx.arc(cx,cy,r*3.3,0,7); tx.fill();
+      if(!(R||G||B)) continue;
+      const c=i*OS+OS/2;
+      for(let d=-reach;d<=reach;d++){
+        const j=c+d; if(j<0||j>=N) continue;
+        const w=Math.exp(-(d*d)/(2*sigma*sigma));
+        _acc[j*3]+=R*w; _acc[j*3+1]+=G*w; _acc[j*3+2]+=B*w;
       }
-      tx.fillStyle=`rgb(${R},${G},${B})`;
-      tx.beginPath(); tx.arc(cx,cy,r,0,7); tx.fill();
     }
+    // 归一化：一条均匀点亮的管子，透光后亮度不该变。除以高斯的总权重。
+    let norm=0;
+    for(let d=-reach;d<=reach;d++) norm+=Math.exp(-(d*d)/(2*sigma*sigma));
+    norm=Math.max(norm/OS,1e-6);
+    // 画成一条竖直渐变。用 ImageData 逐像素画会更准，但渐变色标够用且快得多。
+    const y0=H-15+gap/2, y1=H-15-(NLED-1)*gap-gap/2;
+    const grd=tx.createLinearGradient(0,y0,0,y1);
+    const STOPS=96;
+    for(let k=0;k<=STOPS;k++){
+      const t=k/STOPS, j=Math.min(N-1,Math.round(t*(N-1)));
+      const R=Math.min(255,_acc[j*3]/norm)|0,
+            G=Math.min(255,_acc[j*3+1]/norm)|0,
+            B=Math.min(255,_acc[j*3+2]/norm)|0;
+      grd.addColorStop(t,`rgb(${R},${G},${B})`);
+    }
+    // **辉光先画、渐变后盖。** 反过来的话辉光会加在管子内部，实测整管均匀
+    // 192 会被读成 248（亮 29%），亮效果直接削顶 —— 而模拟器的本职就是
+    // 如实呈现像素值。现在管内是精确值，管外才是外溢的光晕。
+    tx.save(); tx.globalAlpha=0.35; tx.filter="blur(8px)";
+    tx.beginPath(); tx.roundRect(cx-9,9,18,H-18,9); tx.fillStyle=grd; tx.fill();
+    tx.restore();
+    tx.save();
+    tx.beginPath(); tx.roundRect(cx-9,9,18,H-18,9); tx.clip();
+    tx.fillStyle=grd; tx.fillRect(cx-9,9,18,H-18);
+    tx.restore();
   }
 }
 function hsv(h,s,v){h-=Math.floor(h);
@@ -613,11 +683,16 @@ const CELLS=[["BPM",f=>f.bpm.toFixed(1),f=>f.lk?"on":"off"],
  ["质心",f=>(f.cen/1000).toFixed(2)+"k",()=>""],
  ["平坦度",f=>f.flat.toFixed(2),()=>""],
  ["调",f=>f.kr<0?"—":KEYS[f.kr]+(f.km?"":"m"),f=>f.kc>0.3?"on":"off"],
- ["和声变化",f=>f.hm.toFixed(2),f=>f.hm>0.15?"amber":""]];
+ ["和声变化",f=>f.hm.toFixed(2),f=>f.hm>0.15?"amber":""],
+ ["旋律 f0",f=>f.fv?f.f0.toFixed(0)+"Hz":"—",f=>f.fv?"on":"off"],
+ ["氛围",f=>f.mo.toFixed(2),f=>f.mo>0.6?"amber":""],
+ ["能量走向",f=>(f.tr>0?"+":"")+f.tr.toFixed(2),f=>f.tr>0.15?"on":(f.tr<-0.15?"warn":"off")],
+ ["段落",f=>f.nv.toFixed(2),f=>f.sc?"amber":"off"]];
 $("read").innerHTML=CELLS.map(c=>
   `<div class="cell"><span class="k">${c[0]}</span><span class="v">—</span></div>`).join("");
 const vals=[...$("read").querySelectorAll(".v")];
-let pending=null, scheduled=false;
+let pending=null, scheduled=false, lastFrame=null;
+function repaint(){ if(lastFrame) drawTubes(lastFrame.px); }
 function paint(f){
   pending=f;
   if(scheduled) return;                 // 服务端一次可能回一批，只画最后一帧
@@ -625,6 +700,7 @@ function paint(f){
   requestAnimationFrame(()=>{
     scheduled=false;
     const g=pending; if(!g) return;
+    lastFrame=g;
     drawTubes(g.px); drawSpec(g.b);
     CELLS.forEach((c,i)=>{vals[i].textContent=c[1](g); vals[i].className="v "+c[2](g);});
   });
@@ -635,6 +711,13 @@ function segify(id,fn){
     fn(+b.dataset.v); pushCfg();};
 }
 segify("fx",v=>cfg.fx=v); segify("wb",v=>cfg.wb=v); segify("ps",v=>cfg.ps=v);
+// 显示模式与扩散半径只影响画面，不发给后端 —— 真机的扩散是外壳的物理属性，
+// 不是灯效参数。所以这两个控件走的是 repaint，不是 pushCfg。
+$("dm").onclick=e=>{const b=e.target.closest("button"); if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",x===b));
+  showDiffuse=+b.dataset.v===1; $("df").disabled=!showDiffuse; repaint();};
+$("df").oninput=e=>{diffuse=+e.target.value/10;
+  $("dfv").textContent=diffuse.toFixed(1)+" 颗"; repaint();};
 // 页面走的时候才把设备还回去，指示灯不会一直亮着
 addEventListener("pagehide",()=>stopAll(false,true));
 
