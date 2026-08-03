@@ -44,7 +44,31 @@ constexpr FxId kAutoFallback = FX_SPECTRUM_BARS;
 struct AutoConfig {
     // 判据的门槛。取值都来自各特征自己的量纲，不是凭空的魔数。
     float f0_duty_full   = 0.55f;   // f0 有声占比达到这个数算「旋律清晰」
-    float perc_hi        = 0.55f;   // 打击占比高于此算「以鼓为主」
+
+    // **旋律不只要「在」，还要「稳」。** 单位是半音/秒。
+    //
+    // 只看有声占比是不够的：失真吉他的 power chord 有声占比 100%，但 f0 在
+    // 和弦各分音之间逐帧乱跳 —— 画成旋律线就是一团噪点。真旋律是「按住一个音、
+    // 偶尔跨一步」，抖动率低得多。
+    //
+    // 实测（半音/秒）：古典 4.3 · 流行 6.6 · **失真吉他 21–23** · 噪声 70+。
+    // 门槛放在 8–20 之间线性过渡。
+    //
+    // 用「每秒」而不是「每帧」—— 各档 hop 差 8 倍，按帧算的话同一段音乐
+    // 在打点档的抖动率会是氛围档的 1/8。
+    float f0_jit_lo      = 8.0f;
+    float f0_jit_hi      = 20.0f;
+    // 打击占比高于此算「以鼓为主」。**这个值是量出来的。**
+    //
+    // 量的必须是**代码实际使用的那个统计量** —— 能量加权的时间平均，
+    // 不是逐帧瞬时值。我为此栽过一次：照瞬时值（Rap 0.93、摇滚 0.56）
+    // 读出的「空隙」在 0.72，改过去之后 Rap 和电子双双掉回兜底 ——
+    // 因为它们的**平均值**只有 0.67 / 0.66。原来的 0.55 本来就是对的。
+    //
+    // 六段配器完整的素材，实测 perc_avg：
+    //   古典 0.24 · 流行 0.27 · 摇滚(器乐) 0.43 · 摇滚(人声) 0.45 · 电子 0.66 · Rap 0.67
+    // 分布是两簇，空隙在 0.45–0.66，中点 0.55。
+    float perc_hi        = 0.55f;
     float split_contrast = 0.25f;   // 低/高两端的能量差达到此值才谈得上「分层」
     float key_hi         = 0.45f;   // 调性置信度
     float lock_lo        = 0.35f;   // BPM 置信度低于此算「锁不上」
@@ -72,6 +96,10 @@ struct AutoState {
     uint32_t last_switch = 0;
     bool     has_switched = false;
     float    f0_duty   = 0.0f;      // f0 有声的时间占比
+    float    f0_jitter = 0.0f;      // 音高抖动率，半音/秒
+    float    prev_semi = 0.0f;
+    bool     has_prev_semi = false;
+    float    dt_ms     = 0.0f;
     // **平均能量，不是平均比值** —— 见 autoUpdate
     float    e_h = 0.0f, e_p = 0.0f;        // 谐波 / 打击能量
     float    e_ends = 0.0f, e_mid = 0.0f;   // 两端 / 中段能量
@@ -81,6 +109,7 @@ struct AutoState {
 
 inline void autoRetime(AutoState &s, const AutoConfig &c, float dt_ms) {
     s.a_feat = envCoeff(c.feature_tau_ms, dt_ms);
+    s.dt_ms  = dt_ms;              // 抖动率要除以它，换算成「每秒」
 }
 
 inline void autoInit(AutoState &s, const AutoConfig &c, float dt_ms) {
@@ -142,7 +171,8 @@ inline float splitContrast(const float *bands) {
 // 不做任何流派命名。
 // 三个时间平均后的量由调用方传入 —— 让这个函数保持纯粹、可单独测。
 inline void autoScore(const AudioFrame &f, const AutoConfig &c,
-                      float f0_duty, float perc_avg, float split_avg, float *out) {
+                      float f0_duty, float f0_jitter,
+                      float perc_avg, float split_avg, float *out) {
     const float lock = clamp01(f.bpm_conf);
     const float key  = clamp01(f.key_conf);
     const float perc = clamp01(perc_avg);
@@ -150,7 +180,11 @@ inline void autoScore(const AudioFrame &f, const AutoConfig &c,
 
     // 旋律线：旋律要**持续**存在。单帧测到一个 f0 不算 —— rap 和失真吉他
     // 都会时不时冒出一个，占比才是可靠的判据。
-    out[0] = gateAbove(duty, c.f0_duty_full) * (1.0f - 0.6f * perc);
+    // 抖得越厉害越不像旋律。门槛以下满分、门槛以上线性退到 0。
+    float steady = 1.0f;
+    if (c.f0_jit_hi > c.f0_jit_lo)
+        steady = 1.0f - clamp01((f0_jitter - c.f0_jit_lo) / (c.f0_jit_hi - c.f0_jit_lo));
+    out[0] = gateAbove(duty, c.f0_duty_full) * (1.0f - 0.6f * perc) * steady;
 
     // 调性染色：调明确，且以谐波为主
     out[1] = gateAbove(key, c.key_hi) * (1.0f - perc);
@@ -183,6 +217,17 @@ inline bool autoUpdate(AutoState &s, const AutoConfig &c,
     const float v = f.f0_voiced ? 1.0f : 0.0f;
     s.f0_duty += s.a_feat * (v - s.f0_duty);
 
+    // 音高抖动率。只在有声时更新 —— 无声期间 prev_semi 保持不变，
+    // 否则一段空白之后的第一个音会被记成一次巨大的跳变。
+    if (f.f0_voiced && f.f0_hz > 0.0f && isfinite(f.f0_hz)) {
+        const float semi = hzToSemi(f.f0_hz, 80.0f);
+        if (s.has_prev_semi && s.dt_ms > 0.0f) {
+            const float rate = fabsf(semi - s.prev_semi) * 1000.0f / s.dt_ms;
+            if (isfinite(rate)) s.f0_jitter += s.a_feat * (rate - s.f0_jitter);
+        }
+        s.prev_semi = semi; s.has_prev_semi = true;
+    }
+
     // **先平均能量，再取比值。** 平均比值是错的：120BPM 下一记底鼓的
     // 打击占比能到 0.92，但它只占 500ms 里的 50ms，其余帧接近 0 ——
     // 把每帧等权平均，结果被大量间隙帧稀释到 0.1，「以鼓为主」永远判不出来。
@@ -205,7 +250,7 @@ inline bool autoUpdate(AutoState &s, const AutoConfig &c,
     s.e_mid  += s.a_feat * (mid  - s.e_mid);
     const float split_avg = splitContrastOf(s.e_ends, s.e_mid);
 
-    autoScore(f, c, s.f0_duty, perc_avg, split_avg, s.score);
+    autoScore(f, c, s.f0_duty, s.f0_jitter, perc_avg, split_avg, s.score);
 
     // 现任要被换掉，挑战者得**多赢一个 margin**。没有这道滞回的话，
     // 两个分数接近的候选会在 hold_ms 的边缘反复交替，永远凑不满驻留时间 ——
