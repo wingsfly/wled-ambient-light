@@ -364,8 +364,25 @@ $("mic").onclick=async ()=>{
   try{
     await connect();
     stopAll(false);
-    stream=await navigator.mediaDevices.getUserMedia({audio:{
-      echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+
+    // 复用仍然 live 的 stream。
+    //
+    // 「停止」只是停止分析，不该把设备释放掉 —— 而且释放了也未必要得回来：
+    // 虚拟音频设备（Loopback / BlackHole / MediaStreamAudioDestinationNode 之类）
+    // 被 stop 之后，再 getUserMedia 拿到的往往还是**同一个 ended 的 track**。
+    // 那时 ScriptProcessor 照常调度、数据照常发送，读到的却全是静音，
+    // 页面表现为「频谱条不动、灯只剩呼吸」，而没有任何报错。
+    const alive = stream && stream.getAudioTracks().some(t=>t.readyState==="live");
+    if (alive) { lg("复用仍然 live 的音频流"); }
+    else {
+      stream=await navigator.mediaDevices.getUserMedia({audio:{
+        echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+    }
+    const tr0 = stream.getAudioTracks()[0];
+    if (!tr0 || tr0.readyState !== "live") {
+      throw new Error(`拿到的音频轨道已结束（${tr0?tr0.label:"无轨道"}）。`
+        + "这个输入设备被释放后要不回来了 —— 刷新页面，或在系统设置里换一个输入设备");
+    }
 
     // **每次开麦都新建 AudioContext，不复用。**
     // macOS 上 AudioContext 会进入 "interrupted"（系统抢占音频、息屏、省电都会），
@@ -414,7 +431,8 @@ $("mic").onclick=async ()=>{
 
     nSent=nRecv=0; io();
     playing=true; $("stop").disabled=false;
-    lg(`采集就绪 ratio=${ratio.toFixed(3)} 块=4096→${Math.floor(4096/ratio)} 样本`);
+    lg(`采集就绪 ratio=${ratio.toFixed(3)} 块=4096→${Math.floor(4096/ratio)} 样本 `
+       + `track="${tr0.label||"?"}" state=${tr0.readyState}`);
     say(`麦克风开启 · 输入 ${micAc.sampleRate}Hz → 重采样到 ${SR}Hz`);
 
     // 看门狗：onaudioprocess 停了要说出来，而不是静默装死。
@@ -434,13 +452,18 @@ $("mic").onclick=async ()=>{
   }catch(err){ lgErr("开启麦克风失败："+err.name+" "+err.message);
                say("打不开麦克风："+err.message,true); }
 };
-function stopAll(msg=true){
+// release=true 时才真正释放麦克风设备。日常的「停止」不释放 ——
+// 见 openMic 里那段注释：有些设备一放手就要不回来了。
+function stopAll(msg=true, release=false){
   if(msg||playing||node||stream||micAc) lg("■ stopAll  "+snapshot());
   playing=false;
   clearInterval(watchdog); watchdog=0;
   if(node){ try{node.disconnect()}catch(_){} node.onaudioprocess=null; node=null; }
   if(srcNode){ try{srcNode.disconnect()}catch(_){} srcNode=null; }
-  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  if(release && stream){
+    stream.getTracks().forEach(t=>t.stop()); stream=null;
+    lg("已释放麦克风设备");
+  }
   // 关掉麦克风的 ctx。留着它下次复用正是「开关都没反应」的成因。
   if(muteNode){ try{muteNode.disconnect()}catch(_){} muteNode=null; }
   if(micAc){ const c=micAc; micAc=null; c.onstatechange=null;
@@ -532,6 +555,9 @@ function segify(id,fn){
     fn(+b.dataset.v); pushCfg();};
 }
 segify("fx",v=>cfg.fx=v); segify("wb",v=>cfg.wb=v); segify("ps",v=>cfg.ps=v);
+// 页面走的时候才把设备还回去，指示灯不会一直亮着
+addEventListener("pagehide",()=>stopAll(false,true));
+
 drawTubes("0".repeat(96*6));
 connect().catch(()=>say("连不上服务器，确认 server.py 在跑",true));
 </script>
