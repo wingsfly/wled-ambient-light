@@ -113,6 +113,65 @@ void test_nothing_stands_out_stays_on_the_fallback(void) {
 
 // ── 判据本身 ──────────────────────────────────────────────
 
+void test_jittery_pitch_is_not_a_melody(void) {
+    // 有声占比一样是 100%，唯一的差别是 f0 **稳不稳**。
+    //
+    // 失真吉他的 power chord 就是这样：HPS 在和弦各分音之间逐帧乱跳，
+    // 有声率满格，但画成旋律线是一团噪点。实测半音/秒：流行 6.6、失真吉他 21–23。
+    reset();
+    AudioFrame steady = plain(), jitter = plain();
+    steady.f0_voiced = jitter.f0_voiced = true;
+    steady.f0_conf   = jitter.f0_conf   = 0.9f;
+    setPerc(steady, 0.15f); setPerc(jitter, 0.15f);
+    steady.f0_hz = 330.0f;
+
+    // 稳的：选中旋律线
+    for (int k = 0; k < (int)(60000.0f / DT); ++k)
+        autoUpdate(S, C, steady, (uint32_t)((float)k * DT));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(FX_MELODY_LINE, S.current, "稳定的旋律应当选旋律线");
+    TEST_ASSERT_TRUE_MESSAGE(S.f0_jitter < C.f0_jit_lo, "稳定音的抖动率应当很低");
+
+    // 抖的：每帧在 ±0.35 半音之间跳 → 约 30 半音/秒
+    reset();
+    for (int k = 0; k < (int)(60000.0f / DT); ++k) {
+        jitter.f0_hz = 330.0f * powf(2.0f, ((k % 2) ? 0.35f : -0.35f) / 12.0f);
+        autoUpdate(S, C, jitter, (uint32_t)((float)k * DT));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(S.f0_jitter > C.f0_jit_hi, "抖动的音高抖动率应当很高");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(FX_MELODY_LINE, S.current,
+        "逐帧乱跳的音高不该被画成旋律线");
+}
+
+void test_jitter_is_measured_per_second_not_per_frame(void) {
+    // 各档 hop 差 8 倍。按帧算的话，同一段音乐在打点档的抖动率会是氛围档的 1/8 ——
+    // 于是「稳不稳」的判据在不同档位下含义完全不同。
+    const float dt[2]  = {5.805f, 46.44f};
+    float got[2];
+    for (int r = 0; r < 2; ++r) {
+        C = AutoConfig{}; autoInit(S, C, dt[r]);
+        AudioFrame f = plain();
+        f.f0_voiced = true; f.f0_conf = 0.9f; setPerc(f, 0.15f);
+        // **同样的物理滑行速率**，与帧率无关：三角波，周期 1.2s、峰峰 12 半音
+        // → 斜率恒为 24/1.2 = 20 半音/秒。
+        //
+        // 第一版用的是锯齿波，结果在 12→0 的回绕处有一个 12 半音的瞬间跳变，
+        // 那一帧的速率高达 2000 半音/秒，把均值从 20 拉到了 38 ——
+        // 测的是回绕伪影，不是滑行速率。
+        const int steps = (int)(30000.0f / dt[r]);
+        for (int k = 0; k < steps; ++k) {
+            const float ph   = fmodf((float)k * dt[r] / 1200.0f, 1.0f);
+            const float semi = 12.0f * (1.0f - fabsf(2.0f * ph - 1.0f));
+            f.f0_hz = 330.0f * powf(2.0f, semi / 12.0f);
+            autoUpdate(S, C, f, (uint32_t)((float)k * dt[r]));
+        }
+        got[r] = S.f0_jitter;
+    }
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1.5f, got[0], got[1],
+        "同样的物理滑行速率，两档量出的抖动率应当一致");
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(2.0f, 20.0f, got[0],
+        "正对照：三角波斜率 24 半音 / 1.2 秒 = 20 半音/秒");
+}
+
 void test_melody_needs_duration_not_a_single_frame(void) {
     // rap 和失真吉他都会时不时冒出一个 f0。按帧判会让灯效来回横跳，
     // 所以判据是**占比**。
@@ -372,6 +431,8 @@ int main(int, char **) {
     RUN_TEST(test_unlockable_beat_selects_the_color_flow);
     RUN_TEST(test_active_structure_also_selects_the_color_flow);
     RUN_TEST(test_nothing_stands_out_stays_on_the_fallback);
+    RUN_TEST(test_jittery_pitch_is_not_a_melody);
+    RUN_TEST(test_jitter_is_measured_per_second_not_per_frame);
     RUN_TEST(test_melody_needs_duration_not_a_single_frame);
     RUN_TEST(test_melody_loses_to_drums_when_percussion_dominates);
     RUN_TEST(test_split_needs_a_real_split_not_just_drums);
