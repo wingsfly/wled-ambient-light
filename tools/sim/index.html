@@ -174,6 +174,7 @@ footer p{margin:0 0 7px}
 const SR=22050, NB=16, NLED=48;
 const PRESETS=["氛围/古典","通用","电子/鼓机","极限打点"];
 let ws=null, ac=null, node=null, stream=null, srcNode=null, playing=false;
+let micAc=null, hb=0, watchdog=0;    // 麦克风用独立的 AudioContext，见 openMic
 
 const $=id=>document.getElementById(id);
 const dot=$("dot"), conn=$("conn"), status=$("status");
@@ -190,7 +191,12 @@ function connect(){
     ws=new WebSocket(`${proto}://${location.host}/ws`);
     ws.binaryType="arraybuffer";
     ws.onopen=()=>{ setConn(true,"已连接"); pushCfg(); res(ws); };
-    ws.onclose=()=>{ setConn(false,"已断开"); };
+    ws.onclose=()=>{
+      setConn(false,"已断开");
+      // 正在采集时自动重连 —— 否则 onaudioprocess 会一直静默丢数据，
+      // 页面看起来「不响应声音」而没有任何提示。
+      if(playing) setTimeout(()=>connect().then(()=>say("已重连")).catch(()=>{}),1000);
+    };
     ws.onerror=()=>{ setConn(false,"连接失败"); rej(new Error("WebSocket 连接失败")); };
     ws.onmessage=e=>{ try{ (JSON.parse(e.data)||[]).forEach(paint); }catch(_){} };
   });
@@ -275,13 +281,25 @@ $("mic").onclick=async ()=>{
     stopAll(false);
     stream=await navigator.mediaDevices.getUserMedia({audio:{
       echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
-    ac=ac||new (window.AudioContext||window.webkitAudioContext)();
-    if(ac.state==="suspended") await ac.resume();
-    srcNode=ac.createMediaStreamSource(stream);
-    // ScriptProcessor 已废弃但零依赖且到处都能用；这是台调试工具，够了
-    node=ac.createScriptProcessor(4096,1,1);
-    const ratio=ac.sampleRate/SR;
+
+    // **每次开麦都新建 AudioContext，不复用。**
+    // macOS 上 AudioContext 会进入 "interrupted"（系统抢占音频、息屏、省电都会），
+    // 而 resume() 只救得回 "suspended"。复用一个坏掉的 ctx 就再也出不了声，
+    // 而且没有任何报错 —— 表现正是「跑一两分钟后开关麦克风都没反应」。
+    micAc=new (window.AudioContext||window.webkitAudioContext)();
+    if(micAc.state!=="running") await micAc.resume();
+    micAc.onstatechange=()=>{
+      const st=micAc?micAc.state:"closed";
+      if(playing&&st!=="running") say(`音频上下文变为 ${st} —— 点「开启麦克风」重来`,true);
+    };
+
+    srcNode=micAc.createMediaStreamSource(stream);
+    // ScriptProcessor 已废弃，长时间运行会被节流；下面的看门狗就是为它准备的
+    node=micAc.createScriptProcessor(4096,1,1);
+    const ratio=micAc.sampleRate/SR;
+    hb=0;
     node.onaudioprocess=ev=>{
+      hb++;
       if(!ws||ws.readyState!==1) return;
       const inp=ev.inputBuffer.getChannelData(0);
       const n=Math.floor(inp.length/ratio), out=new Float32Array(n);
@@ -292,16 +310,37 @@ $("mic").onclick=async ()=>{
       }
       ws.send(out.buffer);
     };
-    srcNode.connect(node); node.connect(ac.destination);
+    srcNode.connect(node);
+    // ScriptProcessor 必须接到 destination 才会被调度。接一个零增益节点，
+    // 这样不会把麦克风原样播出去造成啸叫。
+    const mute=micAc.createGain(); mute.gain.value=0;
+    node.connect(mute); mute.connect(micAc.destination);
+
     playing=true; $("stop").disabled=false;
-    say(`麦克风开启 · 输入 ${ac.sampleRate}Hz → 重采样到 ${SR}Hz`);
+    say(`麦克风开启 · 输入 ${micAc.sampleRate}Hz → 重采样到 ${SR}Hz`);
+
+    // 看门狗：onaudioprocess 停了要说出来，而不是静默装死。
+    clearInterval(watchdog);
+    let last=-1;
+    watchdog=setInterval(()=>{
+      if(!playing){ clearInterval(watchdog); return; }
+      if(hb===last){
+        say(`采集已停止（音频上下文 ${micAc?micAc.state:"?"}）—— 点「开启麦克风」重来`,true);
+        setConn(ws&&ws.readyState===1, ws&&ws.readyState===1?"已连接":"已断开");
+      }
+      last=hb;
+    },2000);
   }catch(err){ say("打不开麦克风："+err.message,true); }
 };
 function stopAll(msg=true){
   playing=false;
+  clearInterval(watchdog); watchdog=0;
   if(node){ try{node.disconnect()}catch(_){} node.onaudioprocess=null; node=null; }
   if(srcNode){ try{srcNode.disconnect()}catch(_){} srcNode=null; }
   if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  // 关掉麦克风的 ctx。留着它下次复用正是「开关都没反应」的成因。
+  if(micAc){ const c=micAc; micAc=null; c.onstatechange=null;
+             try{ c.close(); }catch(_){} }
   $("stop").disabled=true;
   if(msg) say("已停止");
 }
