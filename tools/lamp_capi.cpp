@@ -35,6 +35,8 @@ struct LampHandle {
     PipelineConfig c;
     Geometry       geo;
     FxId           fx = FX_SPECTRUM_BARS;
+    FxState        fxst;
+    FxConfig       fxcfg;
     bool           white_balance = true;
     float          in_gain = 1.0f;   // 送进管线前的手动增益，补偿麦克风远近
 
@@ -136,7 +138,8 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         const uint32_t t_ms = (uint32_t)((double)h->consumed * 1000.0 / kSampleRate);
         const AudioFrame f = pipelineProcess(h->p, h->c, h->ring.data(),
                                              h->mag.data(), t_ms);
-        fxRender(h->fx, f, h->geo, h->white_balance, h->px.data());
+        fxRender(h->fx, h->fxst, h->fxcfg, f, h->geo, h->white_balance,
+                 (float)presetHopMs(h->p.style.current), h->px.data());
 
         // out 指向调用方（Python ctypes）的缓冲。produced 已由循环条件约束，
         // 这里再挡一道 —— 越界写别人的堆是最难查的一类崩溃，代价只是一次比较。

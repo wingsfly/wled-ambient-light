@@ -18,6 +18,7 @@
 #include "lamp_geometry.h"
 #include "lamp_color.h"
 #include "lamp_pipeline.h"
+#include "lamp_envelope.h"   // envCoeff
 
 namespace lamp {
 
@@ -25,17 +26,41 @@ enum FxId : uint8_t {
     FX_SPECTRUM_BARS = 0,
     FX_BEAT_PULSE    = 1,
     FX_LEVEL_SWEEP   = 2,
-    FX_COUNT         = 3,
+    FX_BAR_IMPACT    = 3,
+    FX_BEAT_RUNNER   = 4,
+    FX_SPLIT_BANDS   = 5,
+    FX_COUNT         = 6,
 };
 
 inline const char *fxName(FxId f) {
     switch (f) {
         case FX_BEAT_PULSE:  return "beat-pulse";
         case FX_LEVEL_SWEEP: return "level-sweep";
+        case FX_BAR_IMPACT:  return "bar-impact";
+        case FX_BEAT_RUNNER: return "beat-runner";
+        case FX_SPLIT_BANDS: return "split-bands";
         case FX_SPECTRUM_BARS:
         default:             return "spectrum-bars";
     }
 }
+
+// 有时间演化的效果需要状态。前三个效果是无状态的纯函数（同一帧输入永远画出
+// 同一幅图），冲击/拖尾这类做不到 —— 它们的当前亮度取决于之前发生过什么。
+struct FxState {
+    float bar[NUM_BANDS] = {0};   // 每段的冲击包络
+    float runner = 0.0f;          // 光点位置 [0,1)
+    float prev_phase = 0.0f;
+    bool  has_phase = false;
+};
+
+struct FxConfig {
+    // 冲击的衰减长度 = 拍周期 × 这个系数。**不能写成固定毫秒**：
+    // 174BPM 一拍只有 345ms，而 90BPM 有 667ms —— 固定值要么在快歌里糊成一片，
+    // 要么在慢歌里早早熄灭。0.55 拍意味着落到 1/e 时下一拍还没到。
+    float decay_beats   = 0.55f;
+    float decay_free_ms = 260.0f;   // 没锁上节拍时的退路
+    float runner_tail   = 0.28f;    // 光点拖尾长度，占管长的比例
+};
 
 // HSV→RGB，色相 [0,1)。特效常用色相环，写一次省得三处重复。
 inline Rgb hsv(float h, float s, float v) {
@@ -117,16 +142,104 @@ inline void fxLevelSweep(const AudioFrame &f, const Geometry &g, Rgb *out) {
         }
 }
 
+// ── 有状态的效果 ──────────────────────────────────────────
+
+// 推进冲击包络。**上升沿瞬时跟随、衰减按拍周期缩放** —— 这两条合起来
+// 才是「冲击峰的宽度和声音一致，同时跟得上 BPM」：
+// 峰出现的时刻与高度完全由声音决定，而它落下去的快慢由节拍决定。
+inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float dt_ms) {
+    if (!isfinite(dt_ms) || dt_ms <= 0.0f) return;
+
+    const float decay_ms = (f.beat_locked && f.bpm > 1.0f)
+                         ? (60000.0f / f.bpm) * c.decay_beats
+                         : c.decay_free_ms;
+    const float a = envCoeff(decay_ms, dt_ms);
+
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        float e = f.bands[i] * kFxBandScale;
+        if (!isfinite(e) || e < 0.0f) e = 0.0f;
+        if (e > 1.0f) e = 1.0f;
+        if (e > st.bar[i]) st.bar[i] = e;              // 冲高：立刻，不做平滑
+        else               st.bar[i] += a * (e - st.bar[i]);   // 掉落：按拍
+    }
+
+    // 光点：锁上节拍时直接跟相位走，一拍跑完一趟；没锁上就匀速漂
+    if (f.beat_locked) { st.runner = f.phase; st.has_phase = true; }
+    else {
+        st.runner += dt_ms / 1400.0f;
+        if (st.runner >= 1.0f) st.runner -= 1.0f;
+    }
+    st.prev_phase = f.phase;
+}
+
+// 冲击柱：16 段各自一根，冲高瞬时、掉落跟拍。用户要的就是这个。
+inline void fxBarImpact(const FxState &st, const AudioFrame &f,
+                        const Geometry &g, Rgb *out) {
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const int   band = (int)(u * (NUM_BANDS - 1) + 0.5f);
+            // 段内位置：越靠段顶越暗，这样每段看起来是一根有高度的柱子
+            const float within = u * (NUM_BANDS - 1) - (float)band + 0.5f;
+            const float lvl = st.bar[band];
+            float v = (within <= lvl) ? 1.0f : 0.0f;
+            v *= perceptual(lvl);
+            // 拍点整体提亮一档，让节奏在视觉上更实
+            if (f.beat_locked) v *= 0.72f + 0.28f * expf(-f.phase * 5.0f);
+            out[mapPixel(g, (Side)s, u)] = hsv((float)band / NUM_BANDS, 0.88f, v);
+        }
+}
+
+// 拍点光点：每拍从管底发到管顶，带拖尾。速度直接由 BPM 决定。
+inline void fxBeatRunner(const FxState &st, const FxConfig &c, const AudioFrame &f,
+                         const Geometry &g, Rgb *out) {
+    const float hue = f.beat_locked ? fmodf(f.bpm / 240.0f, 1.0f) : 0.55f;
+    // 没有信号就彻底熄灭。光点本身带 25% 的底光（否则安静段落里看不见节拍），
+    // 但那个底光不该在真正的静音里还亮着 —— 那看起来像灯没关干净。
+    if (!(f.rms_fast > 0.003f)) return;
+    const float amp = perceptual(f.rms_fast * kFxLevelScale);
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            float d = st.runner - u;              // 拖尾只朝身后
+            if (d < 0.0f) d += 1.0f;
+            const float tail = (d < c.runner_tail) ? (1.0f - d / c.runner_tail) : 0.0f;
+            out[mapPixel(g, (Side)s, u)] = hsv(hue, 0.8f, perceptual(tail) * (0.25f + 0.75f * amp));
+        }
+}
+
+// 低频从底往上、高频从顶往下，在中间相遇。看的是频谱重心怎么移动。
+inline void fxSplitBands(const FxState &st, const AudioFrame &f,
+                         const Geometry &g, Rgb *out) {
+    float lo = 0.0f, hi = 0.0f;
+    for (int i = 0; i < 5; ++i)             lo += st.bar[i];
+    for (int i = NUM_BANDS - 6; i < NUM_BANDS; ++i) hi += st.bar[i];
+    lo /= 5.0f; hi /= 6.0f;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            Rgb c{0, 0, 0};
+            if (u < lo * 0.5f)              c = hsv(0.02f, 0.95f, perceptual(lo));
+            else if (u > 1.0f - hi * 0.5f)  c = hsv(0.55f, 0.9f,  perceptual(hi));
+            out[mapPixel(g, (Side)s, u)] = c;
+        }
+    (void)f;
+}
+
 // 统一入口。渲染后**统一施加白平衡** —— 各效果自己不碰它，
 // 否则总有一个会忘，而忘了的那个偏色，看起来像效果设计得难看。
-inline void fxRender(FxId id, const AudioFrame &f, const Geometry &g,
-                     bool white_balance, Rgb *out) {
+inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
+                     const Geometry &g, bool white_balance, float dt_ms, Rgb *out) {
+    fxAdvance(st, c, f, dt_ms);      // 状态先推进，无状态的效果不受影响
     for (uint16_t i = 0; i < TOTAL_LEDS; ++i) out[i] = Rgb{0, 0, 0};
     switch (id) {
-        case FX_BEAT_PULSE:  fxBeatPulse(f, g, out);    break;
-        case FX_LEVEL_SWEEP: fxLevelSweep(f, g, out);   break;
+        case FX_BEAT_PULSE:  fxBeatPulse(f, g, out);         break;
+        case FX_LEVEL_SWEEP: fxLevelSweep(f, g, out);        break;
+        case FX_BAR_IMPACT:  fxBarImpact(st, f, g, out);     break;
+        case FX_BEAT_RUNNER: fxBeatRunner(st, c, f, g, out); break;
+        case FX_SPLIT_BANDS: fxSplitBands(st, f, g, out);    break;
         case FX_SPECTRUM_BARS:
-        default:             fxSpectrumBars(f, g, out); break;
+        default:             fxSpectrumBars(f, g, out);      break;
     }
     for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
         out[i] = applyWhiteBalance(out[i], white_balance);
