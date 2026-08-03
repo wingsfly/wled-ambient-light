@@ -29,7 +29,9 @@ enum FxId : uint8_t {
     FX_BAR_IMPACT    = 3,
     FX_BEAT_RUNNER   = 4,
     FX_SPLIT_BANDS   = 5,
-    FX_COUNT         = 6,
+    FX_KEY_WASH      = 6,
+    FX_CHROMA_RING   = 7,
+    FX_COUNT         = 8,
 };
 
 inline const char *fxName(FxId f) {
@@ -39,6 +41,8 @@ inline const char *fxName(FxId f) {
         case FX_BAR_IMPACT:  return "bar-impact";
         case FX_BEAT_RUNNER: return "beat-runner";
         case FX_SPLIT_BANDS: return "split-bands";
+        case FX_KEY_WASH:    return "key-wash";
+        case FX_CHROMA_RING: return "chroma-ring";
         case FX_SPECTRUM_BARS:
         default:             return "spectrum-bars";
     }
@@ -50,6 +54,9 @@ struct FxState {
     float bar[NUM_BANDS] = {0};   // 每段的包络（split-bands 用）
     float impact = 0.0f;          // **整管**的冲击包络
     float hue    = 0.5f;          // 跟随频谱质心平滑移动的色相
+    float chroma[kChroma] = {0};  // 平滑后的色度，直接画会闪
+    float key_hue = 0.5f;         // 由调性决定的底色，换调时慢慢挪过去
+    float flash = 0.0f;           // 和声变化的余波
     float runner = 0.0f;          // 光点位置 [0,1)
     float prev_phase = 0.0f;
     bool  has_phase = false;
@@ -149,6 +156,10 @@ inline void fxLevelSweep(const AudioFrame &f, const Geometry &g, Rgb *out) {
 // 推进冲击包络。**上升沿瞬时跟随、衰减按拍周期缩放** —— 这两条合起来
 // 才是「冲击峰的宽度和声音一致，同时跟得上 BPM」：
 // 峰出现的时刻与高度完全由声音决定，而它落下去的快慢由节拍决定。
+// 色度抖动压制要快（否则跟不上旋律），调性换色要慢（否则一犹豫就闪）。
+constexpr float kFxChromaTauMs = 80.0f;
+constexpr float kFxKeyHueTauMs = 600.0f;
+
 inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float dt_ms) {
     if (!isfinite(dt_ms) || dt_ms <= 0.0f) return;
 
@@ -187,6 +198,41 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
             float h = 0.05f + 0.57f * clamp01(log2f(cen / 100.0f) / 5.9f);
             st.hue += 0.06f * (h - st.hue);
         }
+    }
+
+    // 色度与调性色相的平滑。系数同样按物理时间算 —— dt_ms 就是 presetHopMs，
+    // 各档差 8 倍，写死成每帧固定值会让换档时观感突变。
+    const float ac = envCoeff(kFxChromaTauMs, dt_ms);
+    const float ah = envCoeff(kFxKeyHueTauMs, dt_ms);
+
+    // 色度平滑。单帧色度抖得厉害，直接画会闪成一片。
+    for (int i = 0; i < kChroma; ++i) {
+        float v = f.chroma[i];
+        if (!isfinite(v) || v < 0.0f) v = 0.0f;
+        st.chroma[i] += ac * (v - st.chroma[i]);
+    }
+
+    // 调性底色。十二个音级铺满色相环 —— 音乐上相邻的调（五度圈）在这里
+    // 未必相邻，但对眼睛来说「换调了」这件事看得出来就够了。
+    // 大调偏暖（往红黄挪）、小调偏冷（往蓝紫挪），这是最直白的明暗对应。
+    if (f.key_root >= 0 && f.key_conf > 0.15f) {
+        float h = (float)f.key_root / (float)kChroma;
+        h += f.key_is_major ? -0.06f : 0.10f;
+        h -= floorf(h);
+        // 走最短的一段弧，否则从 0.95 挪到 0.05 会绕整整一圈
+        float d = h - st.key_hue;
+        if (d > 0.5f) d -= 1.0f; else if (d < -0.5f) d += 1.0f;
+        st.key_hue += ah * d;
+        st.key_hue -= floorf(st.key_hue);
+    }
+
+    // 和声变化的余波：换和弦时冲一下，然后按拍衰减
+    {
+        float hm = f.harmony_move * 4.0f;
+        if (!isfinite(hm) || hm < 0.0f) hm = 0.0f;
+        if (hm > 1.0f) hm = 1.0f;
+        if (hm > st.flash) st.flash = hm;
+        else               st.flash += a * (hm - st.flash);
     }
 
     // 光点：锁上节拍时直接跟相位走，一拍跑完一趟；没锁上就匀速漂
@@ -263,6 +309,46 @@ inline void fxSplitBands(const FxState &st, const AudioFrame &f,
     (void)f;
 }
 
+// 调性染色：整管的底色由**调**决定，亮度由能量，换和弦时泛起一层波纹。
+//
+// 这是第一个真正吃音高的效果。前面六个换成纯节拍器画面不会有本质区别 ——
+// 它们只知道「有多响、鼓点在哪」。这个能分出 C 大调和 f 小调。
+inline void fxKeyWash(const FxState &st, const AudioFrame &f,
+                      const Geometry &g, Rgb *out) {
+    const float lvl = perceptual(f.rms_fast * kFxLevelScale);
+    if (lvl <= 0.0f) return;
+    // 调性不明时（打击乐、噪声）降饱和度，别硬凑一个颜色出来
+    const float sat = 0.35f + 0.5f * clamp01(f.key_conf);
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            // 和声变化的波纹沿管跑一趟
+            const float w = st.flash * expf(-fabsf(u - st.flash) * 6.0f);
+            const float hue = st.key_hue + 0.08f * w;
+            out[mapPixel(g, (Side)s, u)] = hsv(hue, sat, clamp01(lvl + 0.45f * w));
+        }
+}
+
+// 音级环：十二个音级沿管排开，亮度是各自的能量。
+//
+// 与「频段柱」的区别在横轴：那个是**频率**（43Hz 到 9kHz 一路铺开），
+// 这个是**音级**（C 到 B，八度折叠）。同一个音在任何八度都点亮同一格 ——
+// 于是旋律线在这里是横向移动，而在频段柱上只是某几格忽明忽暗。
+inline void fxChromaRing(const FxState &st, const AudioFrame &f,
+                         const Geometry &g, Rgb *out) {
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const int   pc = (int)(u * (kChroma - 1) + 0.5f);
+            const float e  = st.chroma[pc];
+            // 主音那一格加一圈白边，让调中心看得出来
+            const bool root = (f.key_root == pc && f.key_conf > 0.3f);
+            const float v = perceptual(e) * (root ? 1.0f : 0.82f);
+            Rgb c = hsv((float)pc / kChroma, root ? 0.55f : 0.9f, v);
+            out[mapPixel(g, (Side)s, u)] = c;
+        }
+}
+
 // 统一入口。渲染后**统一施加白平衡** —— 各效果自己不碰它，
 // 否则总有一个会忘，而忘了的那个偏色，看起来像效果设计得难看。
 inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
@@ -275,6 +361,8 @@ inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &
         case FX_BAR_IMPACT:  fxBarImpact(st, f, g, out);     break;
         case FX_BEAT_RUNNER: fxBeatRunner(st, c, f, g, out); break;
         case FX_SPLIT_BANDS: fxSplitBands(st, f, g, out);    break;
+        case FX_KEY_WASH:    fxKeyWash(st, f, g, out);       break;
+        case FX_CHROMA_RING: fxChromaRing(st, f, g, out);    break;
         case FX_SPECTRUM_BARS:
         default:             fxSpectrumBars(f, g, out);      break;
     }

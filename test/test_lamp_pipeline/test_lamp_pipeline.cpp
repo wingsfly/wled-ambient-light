@@ -171,14 +171,26 @@ void test_end_to_end_bpm_is_correct(void) {
 static Rgb g_px[TOTAL_LEDS];
 static FxState g_fxst;
 static FxConfig g_fxcfg;
+// 跑到状态收敛再看结果。key-wash / chroma-ring 依赖平滑后的色度与底色，
+// 只渲染一帧的话它们还在从零往上爬，看着就是「几乎全黑」。
 static void render(FxId e,const AudioFrame&f,const Geometry&g,bool wb,Rgb*o){
-    g_fxst=FxState{}; fxRender(e,g_fxst,g_fxcfg,f,g,wb,23.22f,o); }
+    g_fxst=FxState{};
+    for (int k=0;k<20;++k) fxRender(e,g_fxst,g_fxcfg,f,g,wb,23.22f,o); }
+
+// 一帧「什么都有」的信号：能量、节拍、音高全带上。
+// 新增字段时补在这里，免得老测试因为字段是零而误判成效果坏了。
+static AudioFrame liveFrame(void){
+    AudioFrame f;
+    for (int i=0;i<NUM_BANDS;++i) f.bands[i]=0.5f;
+    for (int i=0;i<kChroma;++i)  f.chroma[i]=(i%4==0)?0.9f:0.15f;
+    f.rms_fast=0.4f; f.peak=0.6f; f.beat_locked=true; f.bpm=128.0f; f.phase=0.1f;
+    f.key_root=0; f.key_conf=0.8f; f.centroid_hz=900.0f; f.harmony_move=0.1f;
+    return f;
+}
 
 void test_every_effect_writes_every_pixel(void) {
     Geometry g;
-    AudioFrame f;
-    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.6f;
-    f.rms_fast = 0.5f; f.peak = 0.7f; f.beat_locked = true; f.phase = 0.0f; f.bpm = 120.0f;
+    const AudioFrame f = liveFrame();
 
     for (int e = 0; e < FX_COUNT; ++e) {
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i) g_px[i] = Rgb{9, 9, 9};
@@ -210,9 +222,7 @@ void test_effects_go_dark_on_silence(void) {
 // 白平衡在 fxRender 里统一施加，各效果自己不碰 —— 否则总有一个会忘。
 void test_white_balance_applies_to_all_effects(void) {
     Geometry g;
-    AudioFrame f;
-    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 1.0f;
-    f.rms_fast = 1.0f; f.peak = 1.0f; f.beat_locked = true;
+    const AudioFrame f = liveFrame();
 
     for (int e = 0; e < FX_COUNT; ++e) {
         static Rgb raw[TOTAL_LEDS];
@@ -232,8 +242,7 @@ void test_effects_stay_within_the_pixel_range(void) {
         g.s1_is_left  = (cfg & 1) != 0;
         g.s1_reversed = (cfg & 2) != 0;
         g.s2_reversed = (cfg & 4) != 0;
-        AudioFrame f;
-        for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.5f;
+        const AudioFrame f = liveFrame();
         for (int e = 0; e < FX_COUNT; ++e) {
             for (uint16_t i = 0; i < TOTAL_LEDS; ++i) g_px[i] = Rgb{0, 0, 0};
             render((FxId)e, f, g, false, g_px);   // 越界会被 sanitizer 或崩溃抓到
@@ -338,12 +347,10 @@ void test_impact_rejects_non_finite(void) {
 }
 
 // 六个效果都要能画满、静音都要熄灭（beat-pulse 的呼吸底光除外）。
-void test_all_six_effects_render(void) {
+void test_all_effects_render(void) {
     Geometry g; FxState st; FxConfig c;
-    AudioFrame f;
-    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.5f;
-    f.rms_fast = 0.4f; f.peak = 0.6f; f.beat_locked = true; f.bpm = 128.0f; f.phase = 0.1f;
-    TEST_ASSERT_EQUAL_INT_MESSAGE(6, (int)FX_COUNT, "效果数量变了，测试没跟上");
+    const AudioFrame f = liveFrame();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(8, (int)FX_COUNT, "效果数量变了，测试没跟上");
     for (int e = 0; e < FX_COUNT; ++e) {
         st = FxState{};
         for (int w = 0; w < 12; ++w) fxRender((FxId)e, st, c, f, g, true, 23.22f, g_px);
@@ -421,6 +428,195 @@ void test_impact_hue_follows_centroid(void) {
         "高频内容没有让色相变冷 —— 质心没接上");
 }
 
+// ── 吃音高的两个效果 ──────────────────────────────────────
+
+static void avgHue(const Rgb *px, float &r, float &g2, float &b) {
+    double R=0,G=0,B=0; int n=0;
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
+        if (px[i].r || px[i].g || px[i].b) { R+=px[i].r; G+=px[i].g; B+=px[i].b; ++n; }
+    if (!n) { r=g2=b=0; return; }
+    r=(float)(R/n); g2=(float)(G/n); b=(float)(B/n);
+}
+
+// key-wash 的底色必须由**调**决定 —— 换个调，颜色就得变。
+// 这条钉的是「它真的读了 key_root」，而不是又一个音量表。
+void test_key_wash_color_follows_the_key(void) {
+    Geometry g; FxConfig c;
+    static Rgb pa[TOTAL_LEDS], pb[TOTAL_LEDS];
+    AudioFrame a = liveFrame(), b = liveFrame();
+    a.key_root = 0;  a.key_is_major = true;      // C 大调
+    b.key_root = 6;  b.key_is_major = true;      // 升F 大调，色相环的对面
+    FxState sa, sb;
+    for (int k = 0; k < 120; ++k) {              // key_hue 是慢挪的，要给够时间
+        fxRender(FX_KEY_WASH, sa, c, a, g, false, 23.22f, pa);
+        fxRender(FX_KEY_WASH, sb, c, b, g, false, 23.22f, pb);
+    }
+    float r1,g1,b1,r2,g2,b2;
+    avgHue(pa,r1,g1,b1); avgHue(pb,r2,g2,b2);
+    const float diff = fabsf(r1-r2) + fabsf(g1-g2) + fabsf(b1-b2);
+    TEST_ASSERT_TRUE_MESSAGE(diff > 60.0f, "换了调颜色却没变 —— 没有真的读 key_root");
+}
+
+// 大调偏暖、小调偏冷。同一个主音，只换大小调，颜色要分得开。
+void test_key_wash_separates_major_from_minor(void) {
+    Geometry g; FxConfig c;
+    static Rgb pa[TOTAL_LEDS], pb[TOTAL_LEDS];
+    AudioFrame a = liveFrame(), b = liveFrame();
+    a.key_root = 3; a.key_is_major = true;
+    b.key_root = 3; b.key_is_major = false;
+    FxState sa, sb;
+    for (int k = 0; k < 120; ++k) {
+        fxRender(FX_KEY_WASH, sa, c, a, g, false, 23.22f, pa);
+        fxRender(FX_KEY_WASH, sb, c, b, g, false, 23.22f, pb);
+    }
+    float r1,g1,b1,r2,g2,b2;
+    avgHue(pa,r1,g1,b1); avgHue(pb,r2,g2,b2);
+    TEST_ASSERT_TRUE_MESSAGE(fabsf(r1-r2)+fabsf(b1-b2) > 25.0f,
+        "大调与小调的颜色分不开");
+}
+
+// 调性不明时降饱和度，别硬凑一个颜色出来。
+void test_key_wash_desaturates_when_key_is_unclear(void) {
+    Geometry g; FxConfig c;
+    static Rgb ps[TOTAL_LEDS], pu[TOTAL_LEDS];
+    AudioFrame sure = liveFrame(), vague = liveFrame();
+    sure.key_conf = 0.95f; vague.key_conf = 0.0f; vague.key_root = -1;
+    FxState s1, s2;
+    for (int k = 0; k < 60; ++k) {
+        fxRender(FX_KEY_WASH, s1, c, sure,  g, false, 23.22f, ps);
+        fxRender(FX_KEY_WASH, s2, c, vague, g, false, 23.22f, pu);
+    }
+    // 饱和度低 = RGB 三分量更接近
+    auto spread=[](const Rgb *p){ int mx=0,mn=255,n=0; float acc=0;
+        for (uint16_t i=0;i<TOTAL_LEDS;++i){ if(!(p[i].r||p[i].g||p[i].b)) continue;
+            mx=p[i].r; mn=p[i].r;
+            if(p[i].g>mx)mx=p[i].g; if(p[i].g<mn)mn=p[i].g;
+            if(p[i].b>mx)mx=p[i].b; if(p[i].b<mn)mn=p[i].b;
+            acc+=(mx-mn); ++n; }
+        return n? acc/n : 0.0f; };
+    TEST_ASSERT_TRUE_MESSAGE(spread(ps) > spread(pu) + 10.0f,
+        "调性不明时没有降饱和 —— 会硬凑出一个不存在的调");
+}
+
+// chroma-ring 的横轴是**音级**不是频率：同一个音在任何八度都点亮同一格。
+// 这是它与频段柱的根本区别 —— 频段柱上八度关系是两个相隔很远的格子。
+// 同一条规矩在管线侧的另一半：和声变化率的平滑。
+//
+// 挑 EDM {1024,HANN,256} 与 通用 {1024,HANN,512} 来比，是因为这两档的
+// **N 和窗完全相同** —— 同一段 PCM 折出的色度一模一样，唯一的差别就是 hop
+// （11.61ms vs 23.22ms，正好 2 倍）。换别的档位组合，N 一变色度就变，
+// 测出来的差异分不清是「平滑漂了」还是「频率分辨率不同」。
+void test_harmony_smoothing_is_defined_in_physical_time(void) {
+    const StylePreset ps[2]  = {STYLE_EDM, STYLE_GENERAL};
+    // 首帧没有 prev_chroma、不更新，所以真正参与平滑的是 steps-1 次。
+    // 8 : 4 才是等时长，9 : 5 帧。
+    const int         stp[2] = {9, 5};
+    float got[2] = {0, 0};
+
+    for (int r = 0; r < 2; ++r) {
+        g_c = PipelineConfig{};
+        g_c.style.manual_lock = ps[r];
+        TEST_ASSERT_TRUE(pipelineInit(g_p, g_c, ps[r]));
+        for (int k = 0; k < stp[r]; ++k) {
+            const float hz = (k % 2) ? 523.25f : 440.0f;   // C5 与 A4 轮换
+            for (size_t t = 0; t < g_p.an.n; ++t)
+                g_pcm[t] = 0.5f * sinf(6.283185307f * hz * (float)t / kSampleRate);
+            analyze(g_p.an.n, g_p.an.wt);
+            pipelineProcess(g_p, g_c, g_pcm, g_mag, (uint32_t)(k * g_p.dt_ms));
+        }
+        got[r] = g_p.harmony;
+    }
+
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.01f,
+        (stp[0]-1) * presetHopMs(ps[0]), (stp[1]-1) * presetHopMs(ps[1]),
+        "两条路径参与平滑的物理时长必须相等，否则这条测试没意义");
+
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.02f, got[0], got[1],
+        "同样的物理时长，快档与慢档的和声平滑结果应当一致");
+
+    // 正对照。这条同时保证了上面的容差足够严：写死每帧 0.25 的话两者差 0.216·D，
+    // 而 got[0] > 0.15 反推 D > 0.22，于是那个差距 > 0.047，必然超出 0.02。
+    TEST_ASSERT_TRUE_MESSAGE(got[0] > 0.15f, "harmony 必须真的爬起来了");
+}
+
+// 平滑必须按**物理时间**定义。各档 hop 从 5.8ms（打点）到 46.4ms（氛围）
+// 差 8 倍，如果系数写死成「每帧 0.25」，同一段音乐在两个档位的反应速度就差 8 倍：
+// 慢档还在爬升，快档早已收敛。
+//
+// 这条测试正是冲着那个写法去的 —— 用固定系数它必红。
+void test_fx_smoothing_is_defined_in_physical_time(void) {
+    const AudioFrame f = liveFrame();
+    // 打点档 hop=128 → 5.805ms，氛围档 hop=1024 → 46.44ms，正好 8 倍。
+    // 步数取 24 : 3，两条路径的总时长严格相等（139.32ms）。
+    //
+    // 139ms ≈ 1.7 个时间常数 —— 停在爬升的中段。如果跑到收敛，两种写法
+    // 都会到达同一个终点，这条测试就什么也证明不了。
+    struct { float dt; int steps; } run[2] = {{5.805f, 24}, {46.44f, 3}};
+    const float kTotalMs = run[0].dt * run[0].steps;
+    float got[2][kChroma];
+    for (int r=0;r<2;++r) {
+        FxState st{}; Geometry g; Rgb px[TOTAL_LEDS];
+        for (int k=0;k<run[r].steps;++k)
+            fxRender(FX_CHROMA_RING, st, g_fxcfg, f, g, false, run[r].dt, px);
+        for (int i=0;i<kChroma;++i) got[r][i]=st.chroma[i];
+    }
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.01f, kTotalMs, run[1].dt*run[1].steps,
+        "两条路径的总时长必须严格相等，否则这条测试没意义");
+
+    for (int i=0;i<kChroma;++i)
+        TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.02f, got[0][i], got[1][i],
+            "同样的物理时长，快档与慢档的平滑结果应当一致");
+
+    // 正对照：必须停在「已经明显动了、但远未收敛」的区间。
+    // 写死每帧 0.25 的话，这里快档是 0.90、慢档是 0.52 —— 差 0.38，远超上面的容差。
+    TEST_ASSERT_TRUE_MESSAGE(got[0][0] > 0.50f, "色度应已明显上升");
+    TEST_ASSERT_TRUE_MESSAGE(got[0][0] < 0.85f, "不能跑到收敛，否则两种写法殊途同归");
+}
+
+void test_chroma_ring_maps_pitch_class_not_frequency(void) {
+    Geometry g; FxConfig c;
+    static Rgb px[TOTAL_LEDS];
+    AudioFrame f = liveFrame();
+    for (int i = 0; i < kChroma; ++i) f.chroma[i] = 0.0f;
+    f.chroma[7] = 1.0f;                          // 只有 G 在响
+    f.key_conf = 0.0f; f.key_root = -1;          // 去掉主音白边的干扰
+    FxState st;
+    for (int k = 0; k < 40; ++k) fxRender(FX_CHROMA_RING, st, c, f, g, false, 23.22f, px);
+
+    // 亮起的应当集中在管长 7/11 处附近
+    int first = -1, last = -1;
+    for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i)
+        if (px[i].r || px[i].g || px[i].b) { if (first < 0) first = i; last = i; }
+    TEST_ASSERT_TRUE_MESSAGE(first >= 0, "只有一个音级在响却全黑");
+    const float mid = 0.5f * (first + last) / (float)(LEDS_PER_TUBE - 1);
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.08f, 7.0f / (kChroma - 1), mid,
+        "G 没落在音级环的对应位置");
+}
+
+// 音级环随旋律移动：换个音，亮的格子跟着走。
+void test_chroma_ring_moves_with_the_note(void) {
+    Geometry g; FxConfig c;
+    static Rgb px[TOTAL_LEDS];
+    int centers[kChroma];
+    for (int pc = 0; pc < kChroma; ++pc) {
+        AudioFrame f = liveFrame();
+        for (int i = 0; i < kChroma; ++i) f.chroma[i] = 0.0f;
+        f.chroma[pc] = 1.0f;
+        f.key_conf = 0.0f; f.key_root = -1;
+        FxState st;
+        for (int k = 0; k < 40; ++k) fxRender(FX_CHROMA_RING, st, c, f, g, false, 23.22f, px);
+        int first = -1, last = -1;
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i)
+            if (px[i].r || px[i].g || px[i].b) { if (first < 0) first = i; last = i; }
+        centers[pc] = (first < 0) ? -1 : (first + last) / 2;
+    }
+    for (int pc = 1; pc < kChroma; ++pc) {
+        TEST_ASSERT_TRUE_MESSAGE(centers[pc] >= 0, "某个音级点不亮");
+        TEST_ASSERT_TRUE_MESSAGE(centers[pc] > centers[pc - 1],
+            "音级升高时亮点没有单调右移");
+    }
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_every_module_to_the_same_hop);
@@ -441,6 +637,13 @@ int main(int, char **) {
     RUN_TEST(test_impact_rejects_non_finite);
     RUN_TEST(test_impact_is_not_a_spectrum_plot);
     RUN_TEST(test_impact_hue_follows_centroid);
-    RUN_TEST(test_all_six_effects_render);
+    RUN_TEST(test_all_effects_render);
+    RUN_TEST(test_key_wash_color_follows_the_key);
+    RUN_TEST(test_key_wash_separates_major_from_minor);
+    RUN_TEST(test_key_wash_desaturates_when_key_is_unclear);
+    RUN_TEST(test_harmony_smoothing_is_defined_in_physical_time);
+    RUN_TEST(test_fx_smoothing_is_defined_in_physical_time);
+    RUN_TEST(test_chroma_ring_maps_pitch_class_not_frequency);
+    RUN_TEST(test_chroma_ring_moves_with_the_note);
     return UNITY_END();
 }
