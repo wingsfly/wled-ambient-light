@@ -13,6 +13,7 @@ WebSocket 用标准库手写（握手 + 帧解析约 80 行），不引第三方
 这台机器是 temporary-workloads-only，装东西不合适。
 """
 import argparse, base64, hashlib, json, mimetypes, os, socket, struct, sys, threading
+from urllib.parse import urlparse, parse_qs
 import ctypes as C
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -42,6 +43,35 @@ class Frame(C.Structure):
                 ("auto_duty", C.c_float), ("auto_jit", C.c_float),
                 ("auto_perc", C.c_float), ("auto_split", C.c_float),
                 ("px", C.c_uint8 * (NLED * 3))]
+
+# ── WLED 固定灯效 ─────────────────────────────────────────
+# 跑的是 WLED **自己的** FX.cpp（见 tools/hostwled/README.md）。
+WLIB = os.path.join(HERE, "libwledfx.dylib" if sys.platform == "darwin" else "libwledfx.so")
+
+def load_wled():
+    """加载失败不致命 —— 音乐律动那半边照常可用，只是固定灯效页不可用。"""
+    if not os.path.exists(WLIB):
+        return None
+    w = C.CDLL(WLIB)
+    w.wledfx_init.restype = C.c_int32
+    w.wledfx_mode_data.restype = C.c_char_p
+    w.wledfx_mode_data.argtypes = [C.c_int32]
+    w.wledfx_mode_count.restype = C.c_int32
+    w.wledfx_mode_blocked.restype = C.c_int32
+    w.wledfx_mode_blocked.argtypes = [C.c_int32]
+    w.wledfx_palette_count.restype = C.c_int32
+    w.wledfx_set.argtypes = [C.c_int32] * 4 + [C.c_uint32] * 3
+    w.wledfx_render.argtypes = [C.c_uint32, C.POINTER(C.c_uint8)]
+    w.wledfx_init()
+    return w
+
+def wled_catalog(w):
+    """效果表直接取自 WLED 的 _modeData，界面不用手抄一份。"""
+    out = []
+    for i in range(w.wledfx_mode_count()):
+        raw = w.wledfx_mode_data(i).decode("utf-8", "replace")
+        out.append({"i": i, "d": raw, "x": bool(w.wledfx_mode_blocked(i))})
+    return {"modes": out, "palettes": w.wledfx_palette_count()}
 
 def load():
     if not os.path.exists(LIB):
@@ -205,6 +235,10 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *a):
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % a))
     def do_GET(self):
+        # 固定灯效：一问一答的 HTTP，不走 WebSocket。
+        # 它不需要实时音频，页面按自己的节奏拉帧就行 —— 少一条长连接少一处状态。
+        if self.path.startswith("/wled/"):
+            return self.do_wled()
         if self.headers.get("Upgrade", "").lower() == "websocket":
             key = self.headers.get("Sec-WebSocket-Key")
             if not key: self.send_error(400); return
@@ -219,12 +253,68 @@ class Handler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def _json(self, obj):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    wargs = None
+    wtime = 0            # WLED 的时钟，**只增不减**
+    wlock = threading.Lock()
+
+    def do_wled(self):
+        w = Handler.wled
+        if w is None:
+            return self._json({"err": "libwledfx 未构建：./tools/build_wled.sh"})
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        gi = lambda k, d=0: int(q.get(k, [d])[0])
+        if u.path == "/wled/catalog":
+            return self._json(wled_catalog(w))
+        if u.path == "/wled/frame":
+            args = (gi("m"), gi("sx", 128), gi("ix", 128), gi("pal", 0),
+                    gi("c0", 0xFF0000), gi("c1", 0x00FF00), gi("c2", 0x0000FF))
+            # **只在参数真的变了时才 set。**
+            # setMode(mode, true) 会重启过渡，每批都调的话画面永远停在
+            # 淡入的头几帧 —— 实测 Solid 只有 (1,0,0)，暗得几乎看不见。
+            # 真机上也是「设一次、然后一直跑」。
+            with Handler.wlock:
+                if args != Handler.wargs:
+                    w.wledfx_set(*args)
+                    Handler.wargs = args
+            # **时钟由服务端单调持有，页面不传绝对时刻。**
+            #
+            # 一开始是页面传 t，换效果时它把 t 归零 —— 而服务端的 WLED 时钟
+            # 已经走到很后面了。millis() 倒流会让过渡进度算成负数，
+            # 画面全黑（实测 Solid 是 0,0,0，而 Rainbow 恰好看不出来）。
+            dt, n = max(1, gi("dt", 33)), max(1, min(gi("n", 1), 240))
+            buf = (C.c_uint8 * 288)()
+            frames = []
+            # WLED 是一份全局状态，多个请求并发进来会互相踩。
+            # 服务器是 ThreadingHTTPServer，这把锁不是可选的。
+            with Handler.wlock:
+                for k in range(n):
+                    Handler.wtime += dt
+                    w.wledfx_render(Handler.wtime, buf)
+                    frames.append(bytes(buf).hex())
+            return self._json({"px": frames, "dt": dt})
+        self.send_error(404)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--host", default="0.0.0.0")
     a = ap.parse_args()
-    Handler.lib = load()
+    Handler.lib  = load()
+    Handler.wled = load_wled()
+    if Handler.wled is None:
+        sys.stderr.write("提示：libwledfx 未构建，固定灯效页不可用（./tools/build_wled.sh）\n")
+    else:
+        sys.stderr.write(f"WLED 固定灯效：{Handler.wled.wledfx_mode_count()} 个效果、"
+                         f"{Handler.wled.wledfx_palette_count()} 个调色板\n")
     sr = Handler.lib.lamp_sample_rate()
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
