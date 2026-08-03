@@ -69,6 +69,8 @@ label.file:focus-within span{outline:2px solid var(--amber);outline-offset:2px}
   color:var(--dim);border-radius:0}
 .seg button:last-child{border-right:0}
 .seg button[aria-pressed="true"]{background:var(--glass);color:var(--amber);font-weight:600}
+/* 自动模式下当前实际在放的那个效果：虚线框，与「我按了哪个」区分开 */
+.seg button.autopick{outline:1px dashed var(--amber);outline-offset:-3px}
 
 .stage{display:grid;grid-template-columns:290px 1fr;gap:18px;align-items:start}
 @media (max-width:840px){.stage{grid-template-columns:1fr}}
@@ -150,6 +152,7 @@ footer p{margin:0 0 7px}
 <div class="controls">
   <div class="grp"><span class="lbl">灯效</span>
     <div class="seg" id="fx">
+      <button data-v="-1">自动</button>
       <button data-v="0" aria-pressed="true">频段柱</button>
       <button data-v="3">冲击柱</button>
       <button data-v="4">拍点光点</button>
@@ -160,6 +163,7 @@ footer p{margin:0 0 7px}
       <button data-v="7">音级环</button>
       <button data-v="8">彩色流动</button>
       <button data-v="9">旋律线</button>
+      <button data-v="10" hidden></button>
     </div></div>
   <div class="grp"><span class="lbl">灯管显示</span>
     <div class="seg" id="dm">
@@ -225,6 +229,8 @@ footer p{margin:0 0 7px}
 <script>
 const SR=22050, NB=16, NLED=48;
 const PRESETS=["氛围/古典","通用","电子/鼓机","极限打点"];
+const FXNAMES=["频段柱","拍点脉冲","电平扫描","冲击柱","拍点光点",
+               "高低分离","调性染色","音级环","彩色流动","旋律线"];
 const KEYS=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 let ws=null, ac=null, node=null, stream=null, srcNode=null, playing=false;
 let micAc=null, muteNode=null, hb=0, watchdog=0;    // 麦克风用独立的 AudioContext，见 openMic
@@ -687,7 +693,11 @@ const CELLS=[["BPM",f=>f.bpm.toFixed(1),f=>f.lk?"on":"off"],
  ["旋律 f0",f=>f.fv?f.f0.toFixed(0)+"Hz":"—",f=>f.fv?"on":"off"],
  ["氛围",f=>f.mo.toFixed(2),f=>f.mo>0.6?"amber":""],
  ["能量走向",f=>(f.tr>0?"+":"")+f.tr.toFixed(2),f=>f.tr>0.15?"on":(f.tr<-0.15?"warn":"off")],
- ["段落",f=>f.nv.toFixed(2),f=>f.sc?"amber":"off"]];
+ ["段落",f=>f.nv.toFixed(2),f=>f.sc?"amber":"off"],
+ ["动态",f=>f.dy.toFixed(2),f=>f.dy>0.7?"on":(f.dy<0.25?"warn":"")],
+ ["打击占比",f=>f.pc.toFixed(2),f=>f.pc>0.55?"amber":""],
+ ["小节",f=>`${f.bpos+1}/${f.bpb}`,f=>f.db?"on":(f.bc>0.4?"amber":"off")],
+ ["自动选中",f=>FXNAMES[f.afx]||"—",()=>"amber"]];
 $("read").innerHTML=CELLS.map(c=>
   `<div class="cell"><span class="k">${c[0]}</span><span class="v">—</span></div>`).join("");
 const vals=[...$("read").querySelectorAll(".v")];
@@ -702,10 +712,19 @@ function paint(f){
     const g=pending; if(!g) return;
     lastFrame=g;
     drawTubes(g.px); drawSpec(g.b);
+    // 自动模式下，把它当前选中的那个按钮做一个次级高亮 ——
+    // 「现在在放哪个效果」比「我按了自动」更需要看得见
+    if (cfg.fx < 0) {
+      [...$("fx").children].forEach(b=>
+        b.classList.toggle("autopick", +b.dataset.v === g.afx));
+    }
     CELLS.forEach((c,i)=>{vals[i].textContent=c[1](g); vals[i].className="v "+c[2](g);});
   });
 }
 function segify(id,fn){
+  // 手动选了效果就清掉自动高亮
+  if (id === "fx") $("fx").addEventListener("click", () =>
+    [...$("fx").children].forEach(b => b.classList.remove("autopick")), true);
   $(id).onclick=e=>{const b=e.target.closest("button"); if(!b)return;
     [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",x===b));
     fn(+b.dataset.v); pushCfg();};

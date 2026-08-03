@@ -497,7 +497,71 @@ void test_key_wash_desaturates_when_key_is_unclear(void) {
             acc+=(mx-mn); ++n; }
         return n? acc/n : 0.0f; };
     TEST_ASSERT_TRUE_MESSAGE(spread(ps) > spread(pu) + 10.0f,
-        "调性不明时没有降饱和 —— 会硬凑出一个不存在的调");
+        "调明确时应当比不明确时更饱和");
+    // 但不能塌到灰白 —— 那是下面两条盯的事
+}
+
+void test_key_wash_falls_back_to_timbre_when_the_key_is_unclear(void) {
+    // 失真吉他：power chord 没有三度、泛音又密，key_conf 一直很低。
+    // 只降饱和的话整首摇滚是一片灰白 —— 判断没错，但什么都没表达。
+    // 退路是频谱质心：在失真下依然稳定、依然与音乐相关。
+    Geometry g; FxConfig c;
+    static Rgb dark[TOTAL_LEDS], bright[TOTAL_LEDS];
+    AudioFrame lo = liveFrame(), hi = liveFrame();
+    lo.key_conf = 0.0f; lo.key_root = -1;
+    hi.key_conf = 0.0f; hi.key_root = -1;
+    for (int i = 0; i < NUM_BANDS; ++i) { lo.bands[i] = 0.02f; hi.bands[i] = 0.02f; }
+    for (int i = 0; i < 4; ++i)  lo.bands[i] = 0.9f;         // 重心在低频
+    for (int i = 11; i < 15; ++i) hi.bands[i] = 0.9f;        // 重心在高频
+    FxState a, b;
+    for (int k = 0; k < 200; ++k) {   // st.hue 的时间常数较长，要跑到收敛
+        fxRender(FX_KEY_WASH, a, c, lo, g, false, 23.22f, dark);
+        fxRender(FX_KEY_WASH, b, c, hi, g, false, 23.22f, bright);
+    }
+    const Rgb x = dark[mapPixel(g, SIDE_L, 0.5f)], y = bright[mapPixel(g, SIDE_L, 0.5f)];
+    const int d = abs((int)x.r - y.r) + abs((int)x.g - y.g) + abs((int)x.b - y.b);
+    TEST_ASSERT_TRUE_MESSAGE(d > 60,
+        "调不明确时颜色应当跟着音色走，而不是两种音色画成同一个颜色");
+}
+
+void test_key_wash_stays_colourful_without_a_key(void) {
+    // 正对照：上一条只说「两种音色不同色」，这条说它们都还是**有颜色的**。
+    // 否则退路退成两种不同的灰，上一条照样能过。
+    Geometry g; FxConfig c;
+    static Rgb px[TOTAL_LEDS];
+    AudioFrame f = liveFrame();
+    f.key_conf = 0.0f; f.key_root = -1;
+    FxState st;
+    for (int k = 0; k < 200; ++k) fxRender(FX_KEY_WASH, st, c, f, g, false, 23.22f, px);
+    int best = 0;
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i) {
+        int mx = px[i].r, mn = px[i].r;
+        if (px[i].g > mx) mx = px[i].g; if (px[i].g < mn) mn = px[i].g;
+        if (px[i].b > mx) mx = px[i].b; if (px[i].b < mn) mn = px[i].b;
+        if (mx - mn > best) best = mx - mn;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(best > 40, "没有调也不该退成灰白");
+}
+
+void test_spectrum_bars_brightness_follows_the_dynamics(void) {
+    // 古典的关键一条：AGC 已经把 bands 的绝对电平抹平，两帧的**形状完全相同**，
+    // 只有 AGC 之前的 rms 不同。乘上 dynamics 之后，pp 才比 ff 暗。
+    //
+    // 注意两帧的 bands 一模一样 —— 不乘 dynamics 的话它们必然画得一样亮，
+    // 这条测试是直接冲着那个写法去的。
+    Geometry g; FxConfig c;
+    static Rgb pf[TOTAL_LEDS], pp[TOTAL_LEDS];
+    AudioFrame ff = liveFrame(), quiet = liveFrame();
+    ff.dynamics = 1.0f; quiet.dynamics = 0.25f;
+    auto sum=[](const Rgb *p){ long a=0; for (uint16_t i=0;i<TOTAL_LEDS;++i) a+=p[i].r+p[i].g+p[i].b; return a; };
+    FxState a, b;
+    for (int k = 0; k < 20; ++k) {
+        fxRender(FX_SPECTRUM_BARS, a, c, ff,    g, false, 23.22f, pf);
+        fxRender(FX_SPECTRUM_BARS, b, c, quiet, g, false, 23.22f, pp);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(sum(pf) > sum(pp) * 2,
+        "频段柱必须跟着动态走，否则古典的 pp 和 ff 画出来一样亮");
+    TEST_ASSERT_TRUE_MESSAGE(sum(pp) > 0, "弱奏是变暗，不是熄灭");
 }
 
 // chroma-ring 的横轴是**音级**不是频率：同一个音在任何八度都点亮同一格。
@@ -785,6 +849,9 @@ int main(int, char **) {
     RUN_TEST(test_key_wash_color_follows_the_key);
     RUN_TEST(test_key_wash_separates_major_from_minor);
     RUN_TEST(test_key_wash_desaturates_when_key_is_unclear);
+    RUN_TEST(test_key_wash_falls_back_to_timbre_when_the_key_is_unclear);
+    RUN_TEST(test_key_wash_stays_colourful_without_a_key);
+    RUN_TEST(test_spectrum_bars_brightness_follows_the_dynamics);
     RUN_TEST(test_color_flow_hue_span_follows_the_mood);
     RUN_TEST(test_color_flow_direction_follows_the_energy_trend);
     RUN_TEST(test_color_flow_speed_follows_the_bpm);

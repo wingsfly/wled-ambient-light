@@ -257,6 +257,86 @@ void test_brightness_maps_logarithmically(void) {
     TEST_ASSERT_TRUE_MESSAGE(m[1] - m[0] > 0.1f, "正对照：一个八度确实有可观贡献");
 }
 
+// ── 动态（AGC 旁路）────────────────────────────────────────
+
+void test_loudest_passage_reads_full_dynamics(void) {
+    reset();
+    float b[NUM_BANDS]; shape(b, 2, 6, 0.3f);
+    run(5000.0f, b, 0.08f, 0.12f, 2.0f, 800.0f);
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.03f, 1.0f, S.dynamics,
+        "一直是同一个电平，那它就是最响处，动态应当满格");
+}
+
+void test_quiet_passage_reads_low_dynamics(void) {
+    reset();
+    float b[NUM_BANDS]; shape(b, 2, 6, 0.3f);
+    run(5000.0f, b, 0.10f, 0.15f, 2.0f, 800.0f);   // ff 建立参考电平
+    run(3000.0f, b, 0.01f, 0.015f, 2.0f, 800.0f);  // −20dB
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.04f, 0.5f, S.dynamics,
+        "−20dB 在 40dB 量程里应当落在 0.5");
+    run(3000.0f, b, 0.001f, 0.0015f, 2.0f, 800.0f); // −40dB
+    TEST_ASSERT_TRUE_MESSAGE(S.dynamics < 0.05f, "−40dB 应当落到量程底部");
+}
+
+void test_dynamics_is_a_ratio_not_an_absolute_level(void) {
+    // 麦克风灵敏度和音源电平各不相同。整体放大 50 倍，动态读数不该变 ——
+    // 它量的是「这一句相对全曲最响处有多轻」。
+    float got[2];
+    const float k[2] = {1.0f, 50.0f};
+    float b[NUM_BANDS]; shape(b, 2, 6, 0.3f);
+    for (int r = 0; r < 2; ++r) {
+        reset();
+        run(5000.0f, b, 0.10f*k[r], 0.15f*k[r], 2.0f, 800.0f);
+        run(3000.0f, b, 0.02f*k[r], 0.03f*k[r], 2.0f, 800.0f);
+        got[r] = S.dynamics;
+    }
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.01f, got[0], got[1], "动态必须与绝对电平无关");
+    TEST_ASSERT_TRUE_MESSAGE(got[0] > 0.4f && got[0] < 0.9f, "正对照：确实落在中段");
+}
+
+void test_reference_level_attacks_instantly(void) {
+    // 参考电平必须瞬时跟上上升。慢慢爬的话，一段渐强会把自己当成参考，
+    // 「这里是最响的」永远测不出来 —— 整首曲子的动态读数会一直贴着 1。
+    reset();
+    float b[NUM_BANDS]; shape(b, 2, 6, 0.3f);
+    run(3000.0f, b, 0.01f, 0.015f, 2.0f, 800.0f);
+    moodUpdate(S, C, b, 0.20f, 0.30f, 2.0f, 800.0f, false);   // 突然 ff
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1e-4f, 0.20f, S.loud_ref,
+        "参考电平应当一帧就跟到新的峰值");
+}
+
+void test_reference_level_releases_slowly(void) {
+    // 反过来，回落必须很慢：一个乐句的休止不该把参考电平拉下来，
+    // 否则下一句进来就又是「满格」，动态范围整个消失。
+    reset();
+    float b[NUM_BANDS]; shape(b, 2, 6, 0.3f);
+    run(2000.0f, b, 0.20f, 0.30f, 2.0f, 800.0f);
+    const float ref0 = S.loud_ref;
+    run(4000.0f, b, 0.02f, 0.03f, 2.0f, 800.0f);   // 4 秒弱奏
+    TEST_ASSERT_TRUE_MESSAGE(S.loud_ref > ref0 * 0.8f,
+        "4 秒弱奏不该把参考电平拉下来太多（τ=60s）");
+    run(180000.0f, b, 0.02f, 0.03f, 2.0f, 800.0f); // 3 分钟
+    TEST_ASSERT_TRUE_MESSAGE(S.loud_ref < ref0 * 0.2f,
+        "但整首曲子都变轻之后，参考电平应当跟下来重新标定");
+}
+
+void test_dynamics_is_defined_in_physical_time(void) {
+    float b[NUM_BANDS]; shape(b, 2, 6, 0.3f);
+    const float dt[2]  = {5.805f, 46.44f};
+    const int   stp[2] = {80, 10};        // 同为 464.4ms
+    float got[2];
+    for (int r = 0; r < 2; ++r) {
+        C = MoodConfig{}; moodInit(S, C, dt[r]);
+        for (int k = 0; k < stp[r]; ++k)
+            moodUpdate(S, C, b, 0.05f, 0.08f, 2.0f, 800.0f, false);
+        got[r] = S.dynamics;
+    }
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.01f, dt[0]*stp[0], dt[1]*stp[1], "总时长必须相等");
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.03f, got[0], got[1],
+        "同样的物理时长，快档与慢档的动态应当一致");
+    TEST_ASSERT_TRUE_MESSAGE(got[0] > 0.3f && got[0] < 0.95f, "必须停在爬升中段");
+}
+
 // ── 稳健性 ────────────────────────────────────────────────
 
 void test_gated_silence_freezes_everything(void) {
@@ -369,6 +449,12 @@ int main(int, char **) {
     RUN_TEST(test_each_mood_component_moves_it_on_its_own);
     RUN_TEST(test_crest_is_gain_invariant);
     RUN_TEST(test_brightness_maps_logarithmically);
+    RUN_TEST(test_loudest_passage_reads_full_dynamics);
+    RUN_TEST(test_quiet_passage_reads_low_dynamics);
+    RUN_TEST(test_dynamics_is_a_ratio_not_an_absolute_level);
+    RUN_TEST(test_reference_level_attacks_instantly);
+    RUN_TEST(test_reference_level_releases_slowly);
+    RUN_TEST(test_dynamics_is_defined_in_physical_time);
     RUN_TEST(test_gated_silence_freezes_everything);
     RUN_TEST(test_nan_input_is_dropped_not_absorbed);
     RUN_TEST(test_retime_keeps_the_statistics);

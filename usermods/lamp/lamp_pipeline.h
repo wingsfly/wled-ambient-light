@@ -19,6 +19,8 @@
 #include "lamp_chroma.h"
 #include "lamp_pitch.h"
 #include "lamp_mood.h"
+#include "lamp_bar.h"
+#include "lamp_hpss.h"
 
 namespace lamp {
 
@@ -64,6 +66,25 @@ struct AudioFrame {
     float section_novelty = 0.0f;   // [0,1]
     bool  section_change  = false;  // 只在换段那一帧为真
     float mood            = 0.0f;   // [0,1]，静↔躁
+    float dynamics        = 1.0f;   // [0,1]，当前响度相对全曲最响处（AGC 旁路）
+
+    // ── 小节 ──
+    // 只有拍点的灯效永远是均匀闪烁；结构感在小节上。
+    int   beats_per_bar = 4;
+    int   bar_pos       = 0;        // 小节内第几拍，0 = 强拍
+    int   bar_index     = 0;        // 第几小节，供乐句级效果用
+    float bar_conf      = 0.0f;
+    bool  downbeat      = false;    // 只在强拍那一帧为真
+
+    // ── 谐波 / 打击分离 ──
+    float bands_h[NUM_BANDS] = {0};
+    float bands_p[NUM_BANDS] = {0};
+    float percussive = 0.0f;        // 打击能量占比 [0,1]
+    //
+    // 自动选灯效**不在这里**。它要吃 FxId，而 lamp_fx.h 反过来又依赖本文件 ——
+    // 放进来就成了循环依赖。更根本的理由是分层：管线产出特征，
+    // 「画哪个效果」是渲染层的决定（用户手动选了就不该被覆盖）。
+    // 见 lamp_auto.h，由渲染层在 pipelineProcess 之后调用。
 };
 
 // 和声变化率的平滑时间常数。够短能跟上换和弦，够长能压住单帧色度抖动。
@@ -77,6 +98,8 @@ struct PipelineConfig {
     StyleConfig    style;
     PitchConfig    pitch;
     MoodConfig     mood;
+    BarConfig      bar;
+    HpssConfig     hpss;
     float          latency_comp_ms = 0.0f;   // 相位提前量，抵消流水线延迟（§3.5）
 };
 
@@ -95,6 +118,8 @@ struct Pipeline {
     StyleSelector style;
     PitchTracker  pitch;
     MoodState     mood;
+    BarState      bar;
+    HpssState     hpss;
     float         dt_ms = 0.0f;
 };
 
@@ -112,6 +137,9 @@ inline bool pipelineRetime(Pipeline &p, const PipelineConfig &c, StylePreset pre
     beatRetime   (p.beat,  c.beat);          // ODF 固定速率，无需改动
     pitchRetime  (p.pitch, c.pitch, dt);
     moodRetime   (p.mood,  c.mood,  dt);
+    hpssRetime   (p.hpss,  c.hpss,  dt);
+    // barRetime 不存在 —— 小节的遗忘按**拍**算，与帧率无关（见 lamp_bar.h）。
+    // 这不是漏掉了：它是这条规矩唯一的例外，且是有意的。
     return true;
 }
 
@@ -127,6 +155,8 @@ inline bool pipelineInit(Pipeline &p, const PipelineConfig &c,
     beatInit    (p.beat,  c.beat);
     pitchInit   (p.pitch, c.pitch, dt);
     moodInit    (p.mood,  c.mood,  dt);
+    barInit     (p.bar);
+    hpssInit    (p.hpss,  c.hpss,  dt);
     p.style = StyleSelector{};
     p.style.current = p.style.candidate = preset;
     for (int i = 0; i < kChroma; ++i) p.prev_chroma[i] = 0.0f;
@@ -208,6 +238,23 @@ inline AudioFrame pipelineProcess(Pipeline &p, const PipelineConfig &c,
     f.section_novelty = p.mood.novelty;
     f.section_change  = p.mood.section_change;
     f.mood            = p.mood.mood;
+    f.dynamics        = p.mood.dynamics;
+
+    // 6. 谐波 / 打击分离。喂 AGC 之后的频段 —— 分离看的是**形状**在时频面上
+    //    怎么延展，与整体增益无关。
+    hpssProcess(p.hpss, c.hpss, f.bands, f.bands_h, f.bands_p);
+    f.percussive = percussiveRatio(f.bands_h, f.bands_p);
+
+    // 7. 小节。重音取**打击路**的低频段 —— 底鼓落在第一拍是这套判据的全部依据，
+    //    用混着人声和贝斯的原始低频会把判据糊掉。
+    float accent = 0.0f;
+    for (int i = 0; i < 4; ++i) accent += f.bands_p[i];
+    barUpdate(p.bar, c.bar, f.phase, f.beat_locked, accent);
+    f.beats_per_bar = p.bar.beats_per_bar;
+    f.bar_pos       = p.bar.pos;
+    f.bar_index     = p.bar.bar_ix;
+    f.bar_conf      = p.bar.conf;
+    f.downbeat      = p.bar.downbeat;
 
     // 6. 风格档位。四个判据现在齐了。
     StyleFeatures sf;

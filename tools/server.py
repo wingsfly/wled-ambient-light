@@ -31,9 +31,13 @@ class Frame(C.Structure):
                 ("key_conf", C.c_float), ("harmony", C.c_float),
                 ("f0", C.c_float), ("f0_conf", C.c_float), ("mood", C.c_float),
                 ("trend", C.c_float), ("novelty", C.c_float),
+                ("dynamics", C.c_float), ("percussive", C.c_float), ("bar_conf", C.c_float),
+                ("bands_h", C.c_float * NB), ("bands_p", C.c_float * NB),
                 ("lock", C.c_int32), ("gate", C.c_int32), ("onset", C.c_int32),
                 ("preset", C.c_int32), ("key_root", C.c_int32), ("key_major", C.c_int32),
                 ("f0_voiced", C.c_int32), ("section", C.c_int32),
+                ("bpb", C.c_int32), ("bar_pos", C.c_int32),
+                ("bar_index", C.c_int32), ("downbeat", C.c_int32), ("auto_fx", C.c_int32),
                 ("px", C.c_uint8 * (NLED * 3))]
 
 def load():
@@ -155,6 +159,11 @@ def serve_ws(sock, lib):
                     "f0": round(f.f0, 1), "fc": round(f.f0_conf, 3), "fv": f.f0_voiced,
                     "mo": round(f.mood, 3), "tr": round(f.trend, 3),
                     "nv": round(f.novelty, 3), "sc": f.section,
+                    "dy": round(f.dynamics, 3), "pc": round(f.percussive, 3),
+                    "bh": [round(x, 4) for x in f.bands_h],
+                    "bp": [round(x, 4) for x in f.bands_p],
+                    "bpb": f.bpb, "bpos": f.bar_pos, "bidx": f.bar_index, "bc": round(f.bar_conf, 3),
+                    "db": f.downbeat, "afx": f.auto_fx,
                     "lk": f.lock, "gt": f.gate, "on": f.onset, "ps": f.preset,
                     "px": bytes(f.px).hex(),
                 })
