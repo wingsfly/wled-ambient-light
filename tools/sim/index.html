@@ -133,6 +133,16 @@ footer p{margin:0 0 7px}
     <span>选择音频文件</span></label>
   <input type="url" id="url" placeholder="或粘贴音频直链（需对方允许跨域）">
   <button id="load">加载链接</button>
+  <span style="flex-basis:100%;height:0"></span>
+  <button id="play" disabled>▶ 播放</button>
+  <input type="range" id="seek" min="0" max="1000" value="0" disabled
+         style="flex:1;min-width:140px" aria-label="播放进度">
+  <span id="ptime" style="font-family:var(--mono);font-size:12px;color:var(--dim);
+        font-variant-numeric:tabular-nums;white-space:nowrap">0:00 / 0:00</span>
+  <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)">
+    音量 <input type="range" id="vol" min="0" max="100" value="80"
+                style="width:80px" aria-label="音量"></label>
+  <span style="flex-basis:100%;height:0"></span>
   <button id="mic" class="rec">开启麦克风</button>
   <button id="stop" disabled>停止</button>
 </div>
@@ -292,60 +302,121 @@ $("ig").oninput=e=>{
   pushCfg();
 };
 
-// ── 重采样到 22.05k 单声道 ────────────────────────────────
-function toMono22k(buf){
-  const n=Math.floor(buf.duration*SR), out=new Float32Array(n);
-  const ch=buf.numberOfChannels, ratio=buf.sampleRate/SR;
-  const src=[]; for(let c=0;c<ch;c++) src.push(buf.getChannelData(c));
-  for(let i=0;i<n;i++){
-    const p=i*ratio, j=p|0, t=p-j;
-    let v=0;
-    for(let c=0;c<ch;c++){
-      const a=src[c][j]||0, b=src[c][j+1]!==undefined?src[c][j+1]:a;
-      v+=a*(1-t)+b*t;
-    }
-    out[i]=v/ch;
-  }
-  return out;
+// ── 播放器 ────────────────────────────────────────────────
+//
+// 播放与分析走**同一个音频图**：source → ScriptProcessor → destination。
+// processor 一边把样本原样透传到耳机、一边抽出来送给服务端。
+// 分成两条路（比如一边 play()、一边定时器发数据）迟早会漂，
+// 而这个页面的全部意义就是「听到的」和「看到的」能对上。
+let audioBuf=null, playSrc=null, playProc=null, gainNode=null;
+let playT0=0, playOffset=0, playing2=false, rafSeek=0;
+
+function fmtT(s){ s=Math.max(0,s|0); return `${(s/60)|0}:${String(s%60).padStart(2,"0")}`; }
+function playPos(){
+  if(!audioBuf) return 0;
+  if(!playing2) return playOffset;
+  return Math.min(audioBuf.duration, playOffset + (ac.currentTime - playT0));
+}
+function tickSeek(){
+  if(!audioBuf) return;
+  const p=playPos();
+  $("seek").value = Math.round(p/audioBuf.duration*1000);
+  $("ptime").textContent = `${fmtT(p)} / ${fmtT(audioBuf.duration)}`;
+  if(playing2 && p>=audioBuf.duration-0.02){ stopPlay(); lg("播放结束"); say("播放结束"); return; }
+  if(playing2) rafSeek=requestAnimationFrame(tickSeek);
 }
 
-// 按真实时间把 PCM 分块送出，服务端才能像收麦克风一样处理。
-async function playBuffer(pcm){
-  await connect();
-  stopAll(false);
-  nSent=nRecv=0; io();
-  playing=true; $("stop").disabled=false;
-  const CH=2048;                       // 约 93ms 一块
-  let pos=0;
-  const t0=performance.now();
-  say(`播放中 · ${(pcm.length/SR).toFixed(1)}s`);
-  while(playing && pos<pcm.length){
-    const end=Math.min(pos+CH,pcm.length);
-    if(ws.readyState!==1) break;
-    // ⚠ 不能写 pcm.subarray(a,b).buffer —— subarray 是**视图**，.buffer 拿到的是
-    // 整个底层 ArrayBuffer（整首歌几十 MB），不是那一块。要按字节偏移切。
-    ws.send(pcm.buffer.slice(pcm.byteOffset+pos*4, pcm.byteOffset+end*4));
-    nSent++; io();
-    pos=end;
-    const due=t0+pos/SR*1000;
-    const wait=due-performance.now();
-    if(wait>0) await new Promise(r=>setTimeout(r,wait));
-  }
-  if(playing) say("播放结束");
-  playing=false; $("stop").disabled=true;
+function buildChain(){
+  const ch=Math.min(2, audioBuf.numberOfChannels);
+  playSrc=ac.createBufferSource();
+  playSrc.buffer=audioBuf;
+  playProc=ac.createScriptProcessor(4096, ch, ch);
+  gainNode=ac.createGain();
+  gainNode.gain.value=$("vol").value/100;
+  const ratio=ac.sampleRate/SR;
+  playProc.onaudioprocess=ev=>{
+    const inb=ev.inputBuffer, outb=ev.outputBuffer;
+    const L=inb.getChannelData(0);
+    const R=inb.numberOfChannels>1 ? inb.getChannelData(1) : L;
+    // 先透传到耳机 —— 这一步不做就是静音播放
+    outb.getChannelData(0).set(L);
+    if(outb.numberOfChannels>1) outb.getChannelData(1).set(R);
+    if(!ws||ws.readyState!==1) return;
+    // 再抽一份混单声道 + 重采样给服务端分析
+    const n=Math.floor(L.length/ratio), out=new Float32Array(n);
+    for(let i=0;i<n;i++){
+      const p=i*ratio, j=p|0, t=p-j;
+      const a=((L[j]||0)+(R[j]||0))*0.5;
+      const b=(j+1<L.length)?(((L[j+1]||0)+(R[j+1]||0))*0.5):a;
+      out[i]=a*(1-t)+b*t;
+    }
+    ws.send(out.buffer); nSent++; io();
+  };
+  playSrc.connect(playProc); playProc.connect(gainNode); gainNode.connect(ac.destination);
 }
+
+async function startPlay(offset){
+  if(!audioBuf) return;
+  await connect();
+  stopAll(false);                       // 麦克风与播放互斥
+  teardownPlay();
+  if(ac.state!=="running") await ac.resume();
+  nSent=nRecv=0; io();
+  buildChain();
+  playOffset=Math.max(0, Math.min(offset||0, audioBuf.duration-0.05));
+  playT0=ac.currentTime;
+  playSrc.start(0, playOffset);
+  playing2=true;
+  $("play").textContent="⏸ 暂停"; $("stop").disabled=false; $("seek").disabled=false;
+  lg(`▶ 播放 从 ${fmtT(playOffset)} 起 · ${audioBuf.numberOfChannels}ch ${ac.sampleRate}Hz`);
+  say(`播放中 · ${fmtT(audioBuf.duration)}`);
+  tickSeek();
+}
+function teardownPlay(){
+  cancelAnimationFrame(rafSeek);
+  if(playSrc){ try{playSrc.onended=null; playSrc.stop();}catch(_){} 
+               try{playSrc.disconnect();}catch(_){} playSrc=null; }
+  if(playProc){ playProc.onaudioprocess=null; try{playProc.disconnect();}catch(_){} playProc=null; }
+  if(gainNode){ try{gainNode.disconnect();}catch(_){} gainNode=null; }
+}
+function pausePlay(){
+  if(!playing2) return;
+  playOffset=playPos(); playing2=false;
+  teardownPlay();
+  $("play").textContent="▶ 播放";
+  lg(`⏸ 暂停于 ${fmtT(playOffset)}`); say("已暂停");
+  tickSeek();
+}
+function stopPlay(){
+  playing2=false; playOffset=0;
+  teardownPlay();
+  $("play").textContent="▶ 播放"; $("stop").disabled=true;
+  tickSeek();
+}
+$("play").onclick=()=>{ playing2 ? pausePlay() : startPlay(playOffset); };
+$("vol").oninput=e=>{ if(gainNode) gainNode.gain.value=e.target.value/100; };
+$("seek").oninput=e=>{
+  if(!audioBuf) return;
+  const p=e.target.value/1000*audioBuf.duration;
+  $("ptime").textContent=`${fmtT(p)} / ${fmtT(audioBuf.duration)}`;
+  if(playing2) startPlay(p); else { playOffset=p; }
+};
 
 // ── 输入源 ────────────────────────────────────────────────
 async function decode(arrbuf,label){
   ac=ac||new (window.AudioContext||window.webkitAudioContext)();
   say(`解码 ${label} …`);
-  const buf=await ac.decodeAudioData(arrbuf);
-  say(`${label} · ${buf.numberOfChannels}ch ${buf.sampleRate}Hz ${buf.duration.toFixed(1)}s → 重采样`);
-  return toMono22k(buf);
+  audioBuf=await ac.decodeAudioData(arrbuf);
+  stopPlay();
+  $("play").disabled=false; $("seek").disabled=false;
+  lg(`已载入 ${label} · ${audioBuf.numberOfChannels}ch ${audioBuf.sampleRate}Hz `
+     + `${audioBuf.duration.toFixed(1)}s`);
+  say(`${label} 已就绪 —— 点「播放」开始，耳机能听到，灯效同步`);
+  tickSeek();
 }
 $("file").onchange=async e=>{
   const f=e.target.files[0]; if(!f) return;
-  try{ playBuffer(await decode(await f.arrayBuffer(), f.name)); }
+  try{ await decode(await f.arrayBuffer(), f.name); }
   catch(err){ say("读不了这个文件："+err.message,true); }
 };
 $("load").onclick=async ()=>{
@@ -354,7 +425,7 @@ $("load").onclick=async ()=>{
     say("下载中 …");
     const r=await fetch(u,{mode:"cors"});
     if(!r.ok) throw new Error("HTTP "+r.status);
-    playBuffer(await decode(await r.arrayBuffer(), "链接音频"));
+    await decode(await r.arrayBuffer(), "链接音频");
   }catch(err){
     say("下载失败："+err.message+"（多半是对方没开 CORS，可先下载再用文件方式）",true);
   }
@@ -364,6 +435,7 @@ $("mic").onclick=async ()=>{
     return say("当前不是安全上下文，浏览器会拒绝麦克风。用 localhost 打开或做端口转发",true);
   }
   lg("▶ 点击「开启麦克风」  "+snapshot());
+  stopPlay();                            // 播放与麦克风互斥，否则两路 PCM 会打架
   try{
     await connect();
     stopAll(false);
@@ -475,7 +547,7 @@ function stopAll(msg=true, release=false){
   $("stop").disabled=true;
   if(msg) say("已停止");
 }
-$("stop").onclick=()=>{ lg("▶ 点击「停止」"); stopAll(); };
+$("stop").onclick=()=>{ lg("■ 点击「停止」"); stopPlay(); stopAll(); };
 
 // ── 绘制 ──────────────────────────────────────────────────
 const tc=$("tubes"),tx=tc.getContext("2d"),sc=$("spec"),sx=sc.getContext("2d");
