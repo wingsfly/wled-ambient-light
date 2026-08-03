@@ -40,7 +40,7 @@ case "${1:-status}" in
       sed -n '1,3p' server.log
       echo
       echo "本机打开：http://localhost:$PORT   ← 麦克风要用这个"
-      echo "远程访问：ssh -L $PORT:localhost:$PORT macbook-m4-max"
+      echo "远程访问：ssh -L $PORT:localhost:$PORT <目标主机>"
     else
       echo "启动失败："; cat server.log; exit 1
     fi ;;
