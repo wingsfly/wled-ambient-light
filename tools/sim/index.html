@@ -156,6 +156,8 @@ footer p{margin:0 0 7px}
       <button data-v="1">拍点脉冲</button>
       <button data-v="2">电平扫描</button>
       <button data-v="5">高低分离</button>
+      <button data-v="6">调性染色</button>
+      <button data-v="7">音级环</button>
     </div></div>
   <div class="grp"><span class="lbl">白平衡</span>
     <div class="seg" id="wb">
@@ -214,6 +216,7 @@ footer p{margin:0 0 7px}
 <script>
 const SR=22050, NB=16, NLED=48;
 const PRESETS=["氛围/古典","通用","电子/鼓机","极限打点"];
+const KEYS=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 let ws=null, ac=null, node=null, stream=null, srcNode=null, playing=false;
 let micAc=null, muteNode=null, hb=0, watchdog=0;    // 麦克风用独立的 AudioContext，见 openMic
 
@@ -608,7 +611,9 @@ const CELLS=[["BPM",f=>f.bpm.toFixed(1),f=>f.lk?"on":"off"],
  ["门限",f=>f.gt?"GATE":"—",f=>f.gt?"warn":"off"],
  ["起音/秒",f=>f.rate.toFixed(1),()=>""],
  ["质心",f=>(f.cen/1000).toFixed(2)+"k",()=>""],
- ["平坦度",f=>f.flat.toFixed(2),()=>""]];
+ ["平坦度",f=>f.flat.toFixed(2),()=>""],
+ ["调",f=>f.kr<0?"—":KEYS[f.kr]+(f.km?"":"m"),f=>f.kc>0.3?"on":"off"],
+ ["和声变化",f=>f.hm.toFixed(2),f=>f.hm>0.15?"amber":""]];
 $("read").innerHTML=CELLS.map(c=>
   `<div class="cell"><span class="k">${c[0]}</span><span class="v">—</span></div>`).join("");
 const vals=[...$("read").querySelectorAll(".v")];

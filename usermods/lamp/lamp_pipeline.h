@@ -16,6 +16,7 @@
 #include "lamp_onset.h"
 #include "lamp_beat.h"
 #include "lamp_style.h"
+#include "lamp_chroma.h"
 
 namespace lamp {
 
@@ -35,7 +36,24 @@ struct AudioFrame {
     float       phase    = 0.0f;         // 拍点相位 [0,1)
     StylePreset preset   = STYLE_GENERAL;
     bool        preset_changed = false;
+
+    // ── 音色 ──
+    // 这两个此前只喂给档位切换、算完就丢，灯效想用都拿不到。
+    float centroid_hz = 0.0f;   // 谱重心，亮/暗
+    float flatness    = 0.0f;   // 噪声型 vs 谐波型
+
+    // ── 音高 ──
+    // 在这之前整条链只知道「有多响、鼓点在哪」，同一首歌换成节拍器画面
+    // 不会有本质区别。色度打开了旋律与和声这一维。
+    float chroma[kChroma] = {0};
+    int   key_root     = -1;    // 0=C … 11=B，-1 表示没结论
+    bool  key_is_major = true;
+    float key_conf     = 0.0f;
+    float harmony_move = 0.0f;  // 和声变化率，换和弦时会跳
 };
+
+// 和声变化率的平滑时间常数。够短能跟上换和弦，够长能压住单帧色度抖动。
+constexpr float kHarmonyTauMs = 80.0f;
 
 struct PipelineConfig {
     EnvelopeConfig env;
@@ -48,6 +66,12 @@ struct PipelineConfig {
 
 struct Pipeline {
     Analysis      an;
+    float         prev_chroma[kChroma] = {0};
+    bool          has_prev_chroma = false;
+    KeyEstimate   key;
+    uint32_t      last_key_ms = 0;
+    bool          key_dated = false;
+    float         harmony = 0.0f;
     Envelope      env;
     Agc           agc;
     OnsetDetector onset;
@@ -83,6 +107,9 @@ inline bool pipelineInit(Pipeline &p, const PipelineConfig &c,
     beatInit    (p.beat,  c.beat);
     p.style = StyleSelector{};
     p.style.current = p.style.candidate = preset;
+    for (int i = 0; i < kChroma; ++i) p.prev_chroma[i] = 0.0f;
+    p.has_prev_chroma = false;
+    p.key = KeyEstimate{}; p.last_key_ms = 0; p.key_dated = false; p.harmony = 0.0f;
     return true;
 }
 
@@ -117,13 +144,41 @@ inline AudioFrame pipelineProcess(Pipeline &p, const PipelineConfig &c,
     f.bpm = p.beat.bpm; f.bpm_conf = p.beat.conf; f.beat_locked = p.beat.locked;
     f.phase = beatPhaseAhead(p.beat, now_ms, c.latency_comp_ms);
 
-    // 4. 风格档位。四个判据现在齐了。
+    // 4. 音色与音高。
+    //
+    // 色度从**已经算好的幅度谱**折叠，不需要第二次 FFT —— 一次 O(bins) 遍历。
+    // 调性每秒重算一次就够：调不会一帧一帧地变，而 24 个候选各做一次
+    // 12 维相关，每帧都算是白费。
+    f.centroid_hz = spectralCentroid(f.bands);
+    f.flatness    = spectralFlatness(f.bands);
+    computeChroma(mag, p.an.n, f.chroma);
+
+    if (p.has_prev_chroma) {
+        // 和声变化率做一次平滑：单帧的色度抖动很大，不平滑的话每一帧都在「换和弦」。
+        //
+        // 系数按**物理时间**算，不能写死成「每帧 0.25」—— 各档 hop 从 5.8ms 到
+        // 46.4ms 差 8 倍，写死的话同一段音乐在氛围档和打点档的反应速度会差 8 倍。
+        const float d = chromaDistance(p.prev_chroma, f.chroma);
+        p.harmony += envCoeff(kHarmonyTauMs, p.dt_ms) * (d - p.harmony);
+    }
+    for (int i = 0; i < kChroma; ++i) p.prev_chroma[i] = f.chroma[i];
+    p.has_prev_chroma = true;
+    f.harmony_move = p.harmony;
+
+    if (!p.key_dated || elapsedAtLeast(now_ms, p.last_key_ms, 1000)) {
+        p.key = estimateKey(f.chroma);
+        p.last_key_ms = now_ms;
+        p.key_dated = true;
+    }
+    f.key_root = p.key.root; f.key_is_major = p.key.is_major; f.key_conf = p.key.conf;
+
+    // 5. 风格档位。四个判据现在齐了。
     StyleFeatures sf;
     sf.onset_rate  = f.onset_rate;
     sf.bpm         = f.bpm;
     sf.bpm_conf    = f.bpm_conf;
-    sf.centroid_hz = spectralCentroid(f.bands);
-    sf.flatness    = spectralFlatness(f.bands);
+    sf.centroid_hz = f.centroid_hz;
+    sf.flatness    = f.flatness;
     f.preset_changed = styleUpdate(p.style, c.style, sf, now_ms);
     f.preset = p.style.current;
 

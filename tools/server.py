@@ -24,11 +24,13 @@ NB, NLED = 16, 96
 # 改了那边必须同步改这里，否则读出来的是错位的垃圾而不是报错。
 class Frame(C.Structure):
     _fields_ = [("bands", C.c_float * NB),
+                ("chroma", C.c_float * 12),
                 ("bpm", C.c_float), ("conf", C.c_float), ("phase", C.c_float),
                 ("rms", C.c_float), ("peak", C.c_float), ("gain", C.c_float),
                 ("rate", C.c_float), ("centroid", C.c_float), ("flatness", C.c_float),
+                ("key_conf", C.c_float), ("harmony", C.c_float),
                 ("lock", C.c_int32), ("gate", C.c_int32), ("onset", C.c_int32),
-                ("preset", C.c_int32),
+                ("preset", C.c_int32), ("key_root", C.c_int32), ("key_major", C.c_int32),
                 ("px", C.c_uint8 * (NLED * 3))]
 
 def load():
@@ -144,6 +146,9 @@ def serve_ws(sock, lib):
                     "pk": round(f.peak, 4), "g": round(f.gain, 2),
                     "rate": round(f.rate, 2), "cen": round(f.centroid, 1),
                     "flat": round(f.flatness, 3),
+                    "chr": [round(x, 3) for x in f.chroma],
+                    "kr": f.key_root, "km": f.key_major,
+                    "kc": round(f.key_conf, 3), "hm": round(f.harmony, 3),
                     "lk": f.lock, "gt": f.gate, "on": f.onset, "ps": f.preset,
                     "px": bytes(f.px).hex(),
                 })

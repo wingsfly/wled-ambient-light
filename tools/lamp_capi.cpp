@@ -25,8 +25,10 @@ extern "C" {
 // ctypes 不会替你检查布局。
 struct LampFrameC {
     float bands[NUM_BANDS];
+    float chroma[kChroma];
     float bpm, conf, phase, rms, peak, gain, rate, centroid, flatness;
-    int32_t lock, gate, onset, preset;
+    float key_conf, harmony;
+    int32_t lock, gate, onset, preset, key_root, key_major;
     uint8_t px[TOTAL_LEDS * 3];      // C++ 效果层渲染的 96 个 RGB
 };
 
@@ -148,8 +150,11 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         memcpy(o.bands, f.bands, sizeof(o.bands));
         o.bpm = f.bpm; o.conf = f.bpm_conf; o.phase = f.phase;
         o.rms = f.rms_fast; o.peak = f.peak; o.gain = f.gain; o.rate = f.onset_rate;
-        o.centroid = spectralCentroid(f.bands);
-        o.flatness = spectralFlatness(f.bands);
+        memcpy(o.chroma, f.chroma, sizeof(o.chroma));
+        o.centroid = f.centroid_hz;
+        o.flatness = f.flatness;
+        o.key_conf = f.key_conf; o.harmony = f.harmony_move;
+        o.key_root = f.key_root; o.key_major = f.key_is_major ? 1 : 0;
         o.lock = f.beat_locked; o.gate = f.gated; o.onset = f.onset;
         o.preset = (int32_t)f.preset;
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i) {
