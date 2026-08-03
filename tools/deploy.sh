@@ -18,18 +18,29 @@ TRIES=${TRIES:-5}
 FILES="usermods/lamp tools/lamp_capi.cpp tools/lamp_fft.h tools/server.py
        tools/build.sh tools/run.sh tools/sim/index.html"
 
+# 输出落到临时文件再看，**不要**写成 `... | ssh ... | tail -4`：
+# 管道的退出码是最后一个命令的，而 tail 永远成功 —— ssh 连不上也会报
+# 「部署完成」，下面那五次重试全是死代码。这个 bug 藏了一阵子，
+# 直到目标机休眠时才露出来（超时了还说部署成功）。
+LOG=$(mktemp -t lampdeploy)
+trap 'rm -f "$LOG"' EXIT
+
 i=1
 while [ $i -le $TRIES ]; do
   printf "第 %d/%d 次… " "$i" "$TRIES"
+  # 包在 if 里跑：`set -e` 对 if 的条件部分豁免，裸写管道的话失败会直接
+  # 终止脚本，连 $? 都取不到。管道最后一个命令是 ssh，退出码就是它的。
   if tar czf - $FILES 2>/dev/null | ssh -o ConnectTimeout=25 -o ServerAliveInterval=5 \
        "$HOST" "mkdir -p $DEST/tools/sim && cd $DEST && tar xzf - \
-                && cd tools && chmod +x build.sh run.sh && ./run.sh restart" 2>&1 \
-     | tail -4; then
+                && cd tools && chmod +x build.sh run.sh && ./run.sh restart" >"$LOG" 2>&1
+  then rc=0; else rc=$?; fi
+  tail -4 "$LOG"
+  if [ $rc -eq 0 ]; then
     echo "部署完成"
     ssh -o ConnectTimeout=25 "$HOST" "cd $DEST/tools && ./run.sh status" 2>/dev/null || true
     exit 0
   fi
-  echo "失败"
+  echo "失败（退出码 $rc）"
   i=$((i + 1))
   [ $i -le $TRIES ] && sleep 5
 done

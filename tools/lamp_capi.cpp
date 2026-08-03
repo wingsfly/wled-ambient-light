@@ -28,7 +28,8 @@ struct LampFrameC {
     float chroma[kChroma];
     float bpm, conf, phase, rms, peak, gain, rate, centroid, flatness;
     float key_conf, harmony;
-    int32_t lock, gate, onset, preset, key_root, key_major;
+    float f0, f0_conf, mood, trend, novelty;
+    int32_t lock, gate, onset, preset, key_root, key_major, f0_voiced, section;
     uint8_t px[TOTAL_LEDS * 3];      // C++ 效果层渲染的 96 个 RGB
 };
 
@@ -155,6 +156,9 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         o.flatness = f.flatness;
         o.key_conf = f.key_conf; o.harmony = f.harmony_move;
         o.key_root = f.key_root; o.key_major = f.key_is_major ? 1 : 0;
+        o.f0 = f.f0_hz; o.f0_conf = f.f0_conf; o.f0_voiced = f.f0_voiced ? 1 : 0;
+        o.mood = f.mood; o.trend = f.energy_trend;
+        o.novelty = f.section_novelty; o.section = f.section_change ? 1 : 0;
         o.lock = f.beat_locked; o.gate = f.gated; o.onset = f.onset;
         o.preset = (int32_t)f.preset;
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i) {

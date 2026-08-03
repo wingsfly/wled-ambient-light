@@ -29,8 +29,11 @@ class Frame(C.Structure):
                 ("rms", C.c_float), ("peak", C.c_float), ("gain", C.c_float),
                 ("rate", C.c_float), ("centroid", C.c_float), ("flatness", C.c_float),
                 ("key_conf", C.c_float), ("harmony", C.c_float),
+                ("f0", C.c_float), ("f0_conf", C.c_float), ("mood", C.c_float),
+                ("trend", C.c_float), ("novelty", C.c_float),
                 ("lock", C.c_int32), ("gate", C.c_int32), ("onset", C.c_int32),
                 ("preset", C.c_int32), ("key_root", C.c_int32), ("key_major", C.c_int32),
+                ("f0_voiced", C.c_int32), ("section", C.c_int32),
                 ("px", C.c_uint8 * (NLED * 3))]
 
 def load():
@@ -149,6 +152,9 @@ def serve_ws(sock, lib):
                     "chr": [round(x, 3) for x in f.chroma],
                     "kr": f.key_root, "km": f.key_major,
                     "kc": round(f.key_conf, 3), "hm": round(f.harmony, 3),
+                    "f0": round(f.f0, 1), "fc": round(f.f0_conf, 3), "fv": f.f0_voiced,
+                    "mo": round(f.mood, 3), "tr": round(f.trend, 3),
+                    "nv": round(f.novelty, 3), "sc": f.section,
                     "lk": f.lock, "gt": f.gate, "on": f.onset, "ps": f.preset,
                     "px": bytes(f.px).hex(),
                 })

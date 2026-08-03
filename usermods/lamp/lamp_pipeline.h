@@ -17,6 +17,8 @@
 #include "lamp_beat.h"
 #include "lamp_style.h"
 #include "lamp_chroma.h"
+#include "lamp_pitch.h"
+#include "lamp_mood.h"
 
 namespace lamp {
 
@@ -50,6 +52,18 @@ struct AudioFrame {
     bool  key_is_major = true;
     float key_conf     = 0.0f;
     float harmony_move = 0.0f;  // 和声变化率，换和弦时会跳
+
+    // ── 旋律线 ──
+    // 色度不分八度、和弦与旋律糊在一起；这里是单声部主旋律的绝对音高。
+    float f0_hz     = 0.0f;
+    float f0_conf   = 0.0f;
+    bool  f0_voiced = false;
+
+    // ── 氛围（几十秒尺度）──
+    float energy_trend    = 0.0f;   // [-1,1]，正=渐强
+    float section_novelty = 0.0f;   // [0,1]
+    bool  section_change  = false;  // 只在换段那一帧为真
+    float mood            = 0.0f;   // [0,1]，静↔躁
 };
 
 // 和声变化率的平滑时间常数。够短能跟上换和弦，够长能压住单帧色度抖动。
@@ -61,6 +75,8 @@ struct PipelineConfig {
     OnsetConfig    onset;
     BeatConfig     beat;
     StyleConfig    style;
+    PitchConfig    pitch;
+    MoodConfig     mood;
     float          latency_comp_ms = 0.0f;   // 相位提前量，抵消流水线延迟（§3.5）
 };
 
@@ -77,6 +93,8 @@ struct Pipeline {
     OnsetDetector onset;
     BeatTracker   beat;
     StyleSelector style;
+    PitchTracker  pitch;
+    MoodState     mood;
     float         dt_ms = 0.0f;
 };
 
@@ -92,6 +110,8 @@ inline bool pipelineRetime(Pipeline &p, const PipelineConfig &c, StylePreset pre
     agcRetime    (p.agc,   c.agc,   dt);
     onsetRetime  (p.onset, c.onset, dt);
     beatRetime   (p.beat,  c.beat);          // ODF 固定速率，无需改动
+    pitchRetime  (p.pitch, c.pitch, dt);
+    moodRetime   (p.mood,  c.mood,  dt);
     return true;
 }
 
@@ -105,6 +125,8 @@ inline bool pipelineInit(Pipeline &p, const PipelineConfig &c,
     agcInit     (p.agc,   c.agc,   dt);
     onsetInit   (p.onset, c.onset, dt);
     beatInit    (p.beat,  c.beat);
+    pitchInit   (p.pitch, c.pitch, dt);
+    moodInit    (p.mood,  c.mood,  dt);
     p.style = StyleSelector{};
     p.style.current = p.style.candidate = preset;
     for (int i = 0; i < kChroma; ++i) p.prev_chroma[i] = 0.0f;
@@ -172,7 +194,22 @@ inline AudioFrame pipelineProcess(Pipeline &p, const PipelineConfig &c,
     }
     f.key_root = p.key.root; f.key_is_major = p.key.is_major; f.key_conf = p.key.conf;
 
-    // 5. 风格档位。四个判据现在齐了。
+    // 旋律线。基频跟踪吃的是**原始幅度谱**，不是 16 段 —— 段太粗，
+    // 一段就跨了好几个半音。
+    const PitchEstimate pe = estimateF0(mag, p.an.n, c.pitch);
+    pitchUpdate(p.pitch, c.pitch, pe, p.dt_ms);
+    f.f0_hz = p.pitch.hz; f.f0_conf = p.pitch.conf; f.f0_voiced = p.pitch.voiced;
+
+    // 5. 氛围。喂的响度三件套是 **AGC 之前**的（`p.env`），
+    //    频段是 AGC 之后的但只取形状 —— 理由见 lamp_mood.h 的头注释。
+    moodUpdate(p.mood, c.mood, f.bands, p.env.fast, p.env.peak,
+               f.onset_rate, f.centroid_hz, f.gated);
+    f.energy_trend    = p.mood.trend;
+    f.section_novelty = p.mood.novelty;
+    f.section_change  = p.mood.section_change;
+    f.mood            = p.mood.mood;
+
+    // 6. 风格档位。四个判据现在齐了。
     StyleFeatures sf;
     sf.onset_rate  = f.onset_rate;
     sf.bpm         = f.bpm;
