@@ -177,6 +177,7 @@ int main(int argc, char **argv) {
     const StylePreset start = (StylePreset)((argc > 4 && !synth_mode) ? atoi(argv[4]) : (int)STYLE_GENERAL);
 
     Pipeline p; PipelineConfig c; Geometry geo;
+    FxState fxst; FxConfig fxcfg;
     if (!pipelineInit(p, c, start)) { fprintf(stderr, "pipelineInit 失败\n"); return 1; }
 
     FILE *o = fopen(argv[2], "w");
@@ -195,7 +196,7 @@ int main(int argc, char **argv) {
 
         const uint32_t t = (uint32_t)((double)pos * 1000.0 / kSampleRate);
         const AudioFrame f = pipelineProcess(p, c, g_frame.data(), g_mag.data(), t);
-        fxRender(fx, f, geo, true, px.data());
+        fxRender(fx, fxst, fxcfg, f, geo, true, presetHopMs(p.style.current), px.data());
 
         if (!first) fprintf(o, ",\n");
         first = false;

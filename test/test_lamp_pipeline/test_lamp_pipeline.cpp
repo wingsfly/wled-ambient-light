@@ -169,6 +169,10 @@ void test_end_to_end_bpm_is_correct(void) {
 // ── 特效 ──────────────────────────────────────────────────
 
 static Rgb g_px[TOTAL_LEDS];
+static FxState g_fxst;
+static FxConfig g_fxcfg;
+static void render(FxId e,const AudioFrame&f,const Geometry&g,bool wb,Rgb*o){
+    g_fxst=FxState{}; fxRender(e,g_fxst,g_fxcfg,f,g,wb,23.22f,o); }
 
 void test_every_effect_writes_every_pixel(void) {
     Geometry g;
@@ -178,7 +182,7 @@ void test_every_effect_writes_every_pixel(void) {
 
     for (int e = 0; e < FX_COUNT; ++e) {
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i) g_px[i] = Rgb{9, 9, 9};
-        fxRender((FxId)e, f, g, false, g_px);
+        render((FxId)e, f, g, false, g_px);
         int lit = 0;
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i) {
             TEST_ASSERT_FALSE_MESSAGE(g_px[i].r == 9 && g_px[i].g == 9 && g_px[i].b == 9,
@@ -193,7 +197,7 @@ void test_effects_go_dark_on_silence(void) {
     Geometry g;
     AudioFrame f;                       // 全零：静音
     for (int e = 0; e < FX_COUNT; ++e) {
-        fxRender((FxId)e, f, g, true, g_px);
+        render((FxId)e, f, g, true, g_px);
         int lit = 0;
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
             if (g_px[i].r > 8 || g_px[i].g > 8 || g_px[i].b > 8) ++lit;
@@ -212,8 +216,8 @@ void test_white_balance_applies_to_all_effects(void) {
 
     for (int e = 0; e < FX_COUNT; ++e) {
         static Rgb raw[TOTAL_LEDS];
-        fxRender((FxId)e, f, g, false, raw);
-        fxRender((FxId)e, f, g, true,  g_px);
+        render((FxId)e, f, g, false, raw);
+        render((FxId)e, f, g, true,  g_px);
         int differs = 0;
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
             if (raw[i].g != g_px[i].g || raw[i].b != g_px[i].b) ++differs;
@@ -232,10 +236,127 @@ void test_effects_stay_within_the_pixel_range(void) {
         for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.5f;
         for (int e = 0; e < FX_COUNT; ++e) {
             for (uint16_t i = 0; i < TOTAL_LEDS; ++i) g_px[i] = Rgb{0, 0, 0};
-            fxRender((FxId)e, f, g, false, g_px);   // 越界会被 sanitizer 或崩溃抓到
+            render((FxId)e, f, g, false, g_px);   // 越界会被 sanitizer 或崩溃抓到
         }
     }
     TEST_ASSERT_TRUE(true);
+}
+
+// ── 冲击效果：这一组是「跟得上 BPM」的全部要点 ────────────
+
+// 峰值必须**瞬时**跟上，不做任何平滑 —— 冲击峰的上升沿就是声音的上升沿。
+void test_impact_rises_instantly(void) {
+    FxState st; FxConfig c;
+    AudioFrame f;
+    f.beat_locked = true; f.bpm = 120.0f;
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
+    fxAdvance(st, c, f, 23.22f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, st.bar[3]);
+
+    f.bands[3] = 0.15f;                       // ×kFxBandScale(6) = 0.9
+    fxAdvance(st, c, f, 23.22f);
+    TEST_ASSERT_TRUE_MESSAGE(st.bar[3] > 0.85f, "冲高没有立刻到位 —— 上升沿被平滑了");
+}
+
+// 衰减长度必须**按拍周期缩放**。这是整个需求的核心：
+// 固定毫秒的衰减在 174BPM（一拍 345ms）会糊成一片，在 90BPM（667ms）又早早熄灭。
+void test_impact_decay_scales_with_bpm(void) {
+    FxConfig c;
+    const float bpms[2] = {90.0f, 180.0f};
+    float halfLife[2];
+    for (int b = 0; b < 2; ++b) {
+        FxState st; AudioFrame f;
+        f.beat_locked = true; f.bpm = bpms[b];
+        for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
+        f.bands[0] = 1.0f;
+        fxAdvance(st, c, f, 5.0f);            // 冲到顶
+        TEST_ASSERT_TRUE(st.bar[0] > 0.9f);
+        f.bands[0] = 0.0f;
+        int steps = 0;
+        while (st.bar[0] > 0.5f && steps < 4000) { fxAdvance(st, c, f, 5.0f); ++steps; }
+        halfLife[b] = steps * 5.0f;
+    }
+    // BPM 翻倍 → 拍周期减半 → 衰减也该减半
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.15f * halfLife[1], halfLife[0] / 2.0f, halfLife[1],
+        "衰减长度没有随 BPM 缩放 —— 快歌会糊成一片");
+    // 而且必须在一拍之内落下去，否则连续两拍会叠在一起
+    for (int b = 0; b < 2; ++b)
+        TEST_ASSERT_TRUE_MESSAGE(halfLife[b] < 60000.0f / bpms[b],
+            "半衰期超过一个拍周期 —— 相邻两拍会糊在一起");
+}
+
+// 没锁上节拍时退回固定衰减，而不是除以零或者不衰减。
+void test_impact_falls_back_when_unlocked(void) {
+    FxState st; FxConfig c;
+    AudioFrame f;
+    f.beat_locked = false; f.bpm = 0.0f;      // 未锁定，BPM 无意义
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
+    f.bands[5] = 1.0f;
+    fxAdvance(st, c, f, 10.0f);
+    TEST_ASSERT_TRUE(st.bar[5] > 0.9f);
+    f.bands[5] = 0.0f;
+    for (int k = 0; k < 40; ++k) fxAdvance(st, c, f, 10.0f);   // 400ms
+    TEST_ASSERT_TRUE_MESSAGE(st.bar[5] < 0.3f, "未锁定时没有衰减");
+    TEST_ASSERT_FALSE(isnan(st.bar[5]));
+}
+
+// 连续拍点之间要落得下去，否则柱子会一直顶在天花板上。
+void test_impact_returns_between_beats(void) {
+    FxState st; FxConfig c;
+    AudioFrame f;
+    f.beat_locked = true; f.bpm = 174.0f;     // 一拍 345ms
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
+    float lowest = 1.0f;
+    for (int beat = 0; beat < 8; ++beat)
+        for (int k = 0; k < 30; ++k) {        // 30 × 11.5ms ≈ 一拍
+            f.bands[2] = (k == 0) ? 1.0f : 0.0f;
+            fxAdvance(st, c, f, 11.5f);
+            if (beat > 2 && k > 20 && st.bar[2] < lowest) lowest = st.bar[2];
+        }
+    TEST_ASSERT_TRUE_MESSAGE(lowest < 0.25f, "拍与拍之间没落下来 —— 柱子一直顶着");
+}
+
+// 状态不得被非有限输入污染。
+void test_impact_rejects_non_finite(void) {
+    FxState st; FxConfig c;
+    AudioFrame f;
+    f.beat_locked = true; f.bpm = 120.0f;
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.3f;
+    fxAdvance(st, c, f, 23.0f);
+    f.bands[4] = NAN; f.bands[7] = INFINITY;
+    fxAdvance(st, c, f, 23.0f);
+    fxAdvance(st, c, f, NAN);                 // dt 也可能坏
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        TEST_ASSERT_FALSE_MESSAGE(isnan(st.bar[i]), "NaN 渗进了冲击包络");
+        TEST_ASSERT_TRUE(st.bar[i] >= 0.0f && st.bar[i] <= 1.0f);
+    }
+}
+
+// 六个效果都要能画满、静音都要熄灭（beat-pulse 的呼吸底光除外）。
+void test_all_six_effects_render(void) {
+    Geometry g; FxState st; FxConfig c;
+    AudioFrame f;
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.5f;
+    f.rms_fast = 0.4f; f.peak = 0.6f; f.beat_locked = true; f.bpm = 128.0f; f.phase = 0.1f;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(6, (int)FX_COUNT, "效果数量变了，测试没跟上");
+    for (int e = 0; e < FX_COUNT; ++e) {
+        st = FxState{};
+        for (int w = 0; w < 12; ++w) fxRender((FxId)e, st, c, f, g, true, 23.22f, g_px);
+        int lit = 0;
+        for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
+            if (g_px[i].r || g_px[i].g || g_px[i].b) ++lit;
+        TEST_ASSERT_TRUE_MESSAGE(lit > 6, "效果几乎全黑");
+    }
+    AudioFrame q;                              // 全零 = 静音
+    for (int e = 0; e < FX_COUNT; ++e) {
+        if ((FxId)e == FX_BEAT_PULSE) continue;
+        st = FxState{};
+        for (int w = 0; w < 12; ++w) fxRender((FxId)e, st, c, q, g, true, 23.22f, g_px);
+        int lit = 0;
+        for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
+            if (g_px[i].r > 8 || g_px[i].g > 8 || g_px[i].b > 8) ++lit;
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, lit, "静音时效果没有熄灭");
+    }
 }
 
 int main(int, char **) {
@@ -251,5 +372,11 @@ int main(int, char **) {
     RUN_TEST(test_effects_go_dark_on_silence);
     RUN_TEST(test_white_balance_applies_to_all_effects);
     RUN_TEST(test_effects_stay_within_the_pixel_range);
+    RUN_TEST(test_impact_rises_instantly);
+    RUN_TEST(test_impact_decay_scales_with_bpm);
+    RUN_TEST(test_impact_falls_back_when_unlocked);
+    RUN_TEST(test_impact_returns_between_beats);
+    RUN_TEST(test_impact_rejects_non_finite);
+    RUN_TEST(test_all_six_effects_render);
     return UNITY_END();
 }
