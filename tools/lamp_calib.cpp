@@ -17,12 +17,19 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 #include "lamp_auto.h"
 #include "lamp_fft.h"
 using namespace lamp;
 static float pcm[2048], re[2048], im[2048], mag[1025], win[2048];
 static uint32_t sd=1;
-static float rnd(int i){ uint32_t n=(uint32_t)i*1664525u+1013904223u; n^=n>>16; n=n*2246822519u; n^=n>>13; return ((n&0xFFFF)/32768.0f)-1.0f; }
+// **必须与 tools/ 下那个 Python 探针逐位一致**，否则「同一段素材」其实不是同一段。
+// 我为此对不上过一次：C++ 版多了一次 n^=n>>13，噪声序列不同，
+// 于是本机校准与线上探针在摇滚这一档给出了不同的结论，白查了一轮。
+static float rnd(int i){
+  uint32_t n=(uint32_t)((int64_t)i*1664525+1013904223) & 0xFFFFFFFFu;
+  n^=n>>16; n=(uint32_t)((uint64_t)n*2246822519u & 0xFFFFFFFFu);
+  return ((n&0xFFFF)/32768.0f)-1.0f; }
 static const float BPM=120.0f, per=60.0f/BPM;
 
 static float classical(float t){
@@ -69,26 +76,30 @@ static float gen(int which,float t,int i){
   case 2:return rockCore(t,i,false);case 3:return rockCore(t,i,true);
   case 4:return rap(t,i);default:return edm(t,i);} }
 
-int main(){
+int main(int argc,char**argv){
+  const float RUN_MS = (argc>1)?(float)atof(argv[1]):45000.0f;
   const char* NM[6]={"古典·柔板","流行","摇滚·器乐","摇滚·人声","Rap","电子"};
   const char* FX[10]={"频段柱","拍点脉冲","电平扫描","冲击柱","拍点光点","高低分离","调性染色","音级环","彩色流动","旋律线"};
-  printf("%-12s %8s %8s %8s %8s %6s | %s\n","","perc_avg","split","f0占比","抖动/s","锁定","自动选中");
+  printf("%-12s %7s %6s %6s %7s %5s %5s  %s %6s | %s\n","","perc","split","f0占","抖动/s","锁定","调性","档","时长","自动选中(五个分数)");
   for(int w=0;w<6;++w){
     static Pipeline P; static PipelineConfig PC; static AutoState A; static AutoConfig AC;
     P=Pipeline{}; A=AutoState{};
     pipelineInit(P,PC,STYLE_GENERAL); autoInit(A,AC,presetHopMs(STYLE_GENERAL));
-    size_t consumed=0; float lock=0;
-    for(int frame=0;frame<2200;++frame){
+    size_t consumed=0; float lock=0, key=0; int ps=1; uint32_t tend=0;
+    const int NFR=(int)(RUN_MS/presetHopMs(STYLE_GENERAL));
+    for(int frame=0;frame<NFR;++frame){
       const size_t n=P.an.n;
       for(size_t k=0;k<n;++k){ const int idx=(int)(consumed+k); pcm[k]=gen(w,(float)idx/kSampleRate,idx); }
       fillWindow(P.an.wt,win,n); magnitudeSpectrum(pcm,win,n,re,im,mag);
       const uint32_t t_ms=(uint32_t)((double)consumed*1000.0/kSampleRate);
       const AudioFrame f=pipelineProcess(P,PC,pcm,mag,t_ms);
-      autoUpdate(A,AC,f,t_ms); lock=f.bpm_conf;
+      autoUpdate(A,AC,f,t_ms); lock=f.bpm_conf; key=f.key_conf; ps=(int)f.preset; tend=t_ms;
       consumed+=(size_t)(presetHopMs(P.style.current)*kSampleRate/1000.0f);
     }
     const float pa=(A.e_h+A.e_p>1e-12f)?A.e_p/(A.e_h+A.e_p):0.0f;
-    printf("%-12s %8.2f %8.2f %8.2f %8.1f %6.2f | %s\n", NM[w], pa,
-           splitContrastOf(A.e_ends,A.e_mid), A.f0_duty, A.f0_jitter, lock, FX[A.current]);
+    printf("%-12s %7.2f %6.2f %6.2f %7.1f %5.2f %5.2f  档%d %5.1fs | %-8s (%.2f/%.2f/%.2f/%.2f/%.2f)\n",
+           NM[w], pa, splitContrastOf(A.e_ends,A.e_mid), A.f0_duty, A.f0_jitter, lock, key,
+           ps, tend/1000.0f, FX[A.current],
+           A.score[0],A.score[1],A.score[2],A.score[3],A.score[4]);
   }
   return 0; }

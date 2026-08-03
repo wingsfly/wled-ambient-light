@@ -297,6 +297,34 @@ void test_hysteresis_keeps_a_near_tie_from_flapping(void) {
     TEST_ASSERT_EQUAL_INT(first, S.current);
 }
 
+void test_a_fluctuating_key_decides_the_same_as_its_average(void) {
+    // 回归：**六个判据输入一个都不能漏平均。**
+    //
+    // 调性是每秒重估一次的，在失真吉他上会在 0.27–1.00 之间摆。拿瞬时值打分，
+    // 结论就取决于「你恰好采到哪一秒」—— 实测同一段素材喂 45 秒与 51 秒
+    // 得出不同的灯效。那不是环境差异，是结果本身不可复现。
+    //
+    // 判据：摆动的 key_conf 与它的**平均值**必须给出同一个结论。
+    reset();
+    AudioFrame lo = plain(), hi = plain(), avg = plain();
+    lo.key_conf = 0.30f; hi.key_conf = 0.90f; avg.key_conf = 0.60f;
+    lo.key_root = hi.key_root = avg.key_root = 0;
+    setPerc(lo, 0.05f); setPerc(hi, 0.05f); setPerc(avg, 0.05f);
+
+    // 每 40 帧（≈1 秒，与调性重估周期同量级）翻一次
+    for (int k = 0; k < (int)(90000.0f / DT); ++k)
+        autoUpdate(S, C, ((k / 40) % 2) ? hi : lo, (uint32_t)((float)k * DT));
+    const FxId swinging = S.current;
+
+    reset();
+    const FxId constant = settle(avg, 0.05f);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(constant, swinging,
+        "摆动的调性置信度与它的平均值必须给出同一个结论");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(FX_KEY_WASH, constant,
+        "正对照：平均 0.60 超过门槛 0.45，本来就该选调性染色");
+}
+
 void test_pulsed_drums_still_commit(void) {
     // 回归，真机上抓到的：**判据输入必须是时间平均的，而且要按能量加权。**
     //
@@ -440,6 +468,7 @@ int main(int, char **) {
     RUN_TEST(test_a_new_candidate_must_win_for_hold_ms);
     RUN_TEST(test_dwell_blocks_a_second_switch);
     RUN_TEST(test_hysteresis_keeps_a_near_tie_from_flapping);
+    RUN_TEST(test_a_fluctuating_key_decides_the_same_as_its_average);
     RUN_TEST(test_pulsed_drums_still_commit);
     RUN_TEST(test_two_close_challengers_still_get_committed);
     RUN_TEST(test_falls_back_when_the_music_stops_standing_out);
