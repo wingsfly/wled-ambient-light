@@ -81,7 +81,11 @@ struct AgcConfig {
     float squelch    = 0.002f;     // 低于此视为静音
     float gate_hyst  = 0.5f;       // 关门阈 = squelch × 此值，开门阈 = squelch
     float gain_min   = 1.0f;
-    float gain_max   = 40.0f;
+    // 远场麦克风的输入 RMS 常在 0.001–0.01 量级，要拉到 target=0.25 需要
+    // 25–250 倍。上限 40 会让 AGC 顶格还够不着目标 —— 实测拿手机节拍器对着
+    // 笔记本麦克风，增益恒为 40.0，频段能量始终偏低、灯几乎不亮。
+    // 静音由 squelch 门限拦住，不靠压低这个上限来防底噪。
+    float    gain_max   = 250.0f;
     float attack_ms  = 120.0f;     // 增益**下降**（信号变响）
     float release_ms = 6000.0f;    // 增益**上升**（信号变轻）
 };
