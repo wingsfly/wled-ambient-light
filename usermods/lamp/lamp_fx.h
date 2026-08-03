@@ -47,7 +47,9 @@ inline const char *fxName(FxId f) {
 // 有时间演化的效果需要状态。前三个效果是无状态的纯函数（同一帧输入永远画出
 // 同一幅图），冲击/拖尾这类做不到 —— 它们的当前亮度取决于之前发生过什么。
 struct FxState {
-    float bar[NUM_BANDS] = {0};   // 每段的冲击包络
+    float bar[NUM_BANDS] = {0};   // 每段的包络（split-bands 用）
+    float impact = 0.0f;          // **整管**的冲击包络
+    float hue    = 0.5f;          // 跟随频谱质心平滑移动的色相
     float runner = 0.0f;          // 光点位置 [0,1)
     float prev_phase = 0.0f;
     bool  has_phase = false;
@@ -163,6 +165,30 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
         else               st.bar[i] += a * (e - st.bar[i]);   // 掉落：按拍
     }
 
+    // 整管冲击。**这是与频段柱的分界**：那个画的是频谱形状（16 根柱子），
+    // 这个画的是「一次击打有多重」—— 一个标量，铺满整根管。
+    //
+    // 峰值高度由声音决定（冲高瞬时），落下去的快慢由节拍决定（衰减跟拍周期）。
+    // 用 rms_fast 而不是 peak：peak 自己就带保持衰减，套两层会拖成一片糊。
+    {
+        float e = f.rms_fast * kFxLevelScale;
+        if (!isfinite(e) || e < 0.0f) e = 0.0f;
+        if (e > 1.0f) e = 1.0f;
+        if (e > st.impact) st.impact = e;
+        else               st.impact += a * (e - st.impact);
+    }
+
+    // 色相跟频谱质心走：低沉的击打偏暖、明亮的偏冷。
+    // 慢慢挪，不然每帧跳色会很吵。
+    {
+        const float cen = spectralCentroid(f.bands);
+        if (cen > 40.0f) {
+            // 100Hz→0.05（红橙） … 6kHz→0.62（蓝）
+            float h = 0.05f + 0.57f * clamp01(log2f(cen / 100.0f) / 5.9f);
+            st.hue += 0.06f * (h - st.hue);
+        }
+    }
+
     // 光点：锁上节拍时直接跟相位走，一拍跑完一趟；没锁上就匀速漂
     if (f.beat_locked) { st.runner = f.phase; st.has_phase = true; }
     else {
@@ -172,22 +198,33 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     st.prev_phase = f.phase;
 }
 
-// 冲击柱：16 段各自一根，冲高瞬时、掉落跟拍。用户要的就是这个。
+// 整管冲击：一次击打照亮整根管子，然后按拍周期掉落。
+//
+// **与「频段柱」的区别不只是加了拖尾** —— 那个画的是频谱形状（16 根柱子
+// 各有各的高度），这个画的是「这一下打得有多重」：一个标量铺满整管。
+// 第一版做成了 16 段各带拖尾，布局和配色都跟频段柱一样，等于同一个东西
+// 加了个尾巴，没有存在的理由。
+//
+// **与「拍点脉冲」的区别**：那个纯由相位驱动，每拍形状一模一样、跟音量无关；
+// 这个的峰值高度由实际击打强度决定 —— 弱拍就弱、重拍就亮。
+//
+// 冲击的强弱同时体现在两处：亮度，以及**点亮的长度**（从管中央向两端扩散）。
+// 只用亮度的话弱击打几乎看不见，加上长度才有「冲击波」的样子。
 inline void fxBarImpact(const FxState &st, const AudioFrame &f,
                         const Geometry &g, Rgb *out) {
+    const float v = perceptual(st.impact);
+    if (v <= 0.0f) return;
+    const float reach = 0.12f + 0.88f * st.impact;   // 冲击越强，铺得越开
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
             const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
-            const int   band = (int)(u * (NUM_BANDS - 1) + 0.5f);
-            // 段内位置：越靠段顶越暗，这样每段看起来是一根有高度的柱子
-            const float within = u * (NUM_BANDS - 1) - (float)band + 0.5f;
-            const float lvl = st.bar[band];
-            float v = (within <= lvl) ? 1.0f : 0.0f;
-            v *= perceptual(lvl);
-            // 拍点整体提亮一档，让节奏在视觉上更实
-            if (f.beat_locked) v *= 0.72f + 0.28f * expf(-f.phase * 5.0f);
-            out[mapPixel(g, (Side)s, u)] = hsv((float)band / NUM_BANDS, 0.88f, v);
+            const float d = fabsf(u - 0.5f) * 2.0f;  // 到管中央的距离 [0,1]
+            if (d > reach) { out[mapPixel(g, (Side)s, u)] = Rgb{0, 0, 0}; continue; }
+            // 边缘柔化，免得看起来像一段硬邦邦的色块
+            const float edge = 1.0f - (d / reach) * (d / reach) * 0.55f;
+            out[mapPixel(g, (Side)s, u)] = hsv(st.hue, 0.85f, v * edge);
         }
+    (void)f;
 }
 
 // 拍点光点：每拍从管底发到管顶，带拖尾。速度直接由 BPM 决定。

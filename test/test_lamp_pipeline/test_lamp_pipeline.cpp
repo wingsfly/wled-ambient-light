@@ -250,12 +250,13 @@ void test_impact_rises_instantly(void) {
     AudioFrame f;
     f.beat_locked = true; f.bpm = 120.0f;
     for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
+    f.rms_fast = 0.0f;
     fxAdvance(st, c, f, 23.22f);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, st.bar[3]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, st.impact);
 
-    f.bands[3] = 0.15f;                       // ×kFxBandScale(6) = 0.9
+    f.rms_fast = 0.35f;                       // ×kFxLevelScale(3) ≈ 1.0
     fxAdvance(st, c, f, 23.22f);
-    TEST_ASSERT_TRUE_MESSAGE(st.bar[3] > 0.85f, "冲高没有立刻到位 —— 上升沿被平滑了");
+    TEST_ASSERT_TRUE_MESSAGE(st.impact > 0.85f, "冲高没有立刻到位 —— 上升沿被平滑了");
 }
 
 // 衰减长度必须**按拍周期缩放**。这是整个需求的核心：
@@ -268,12 +269,12 @@ void test_impact_decay_scales_with_bpm(void) {
         FxState st; AudioFrame f;
         f.beat_locked = true; f.bpm = bpms[b];
         for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
-        f.bands[0] = 1.0f;
+        f.rms_fast = 1.0f;
         fxAdvance(st, c, f, 5.0f);            // 冲到顶
-        TEST_ASSERT_TRUE(st.bar[0] > 0.9f);
-        f.bands[0] = 0.0f;
+        TEST_ASSERT_TRUE(st.impact > 0.9f);
+        f.rms_fast = 0.0f;
         int steps = 0;
-        while (st.bar[0] > 0.5f && steps < 4000) { fxAdvance(st, c, f, 5.0f); ++steps; }
+        while (st.impact > 0.5f && steps < 4000) { fxAdvance(st, c, f, 5.0f); ++steps; }
         halfLife[b] = steps * 5.0f;
     }
     // BPM 翻倍 → 拍周期减半 → 衰减也该减半
@@ -291,13 +292,13 @@ void test_impact_falls_back_when_unlocked(void) {
     AudioFrame f;
     f.beat_locked = false; f.bpm = 0.0f;      // 未锁定，BPM 无意义
     for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
-    f.bands[5] = 1.0f;
+    f.rms_fast = 1.0f;
     fxAdvance(st, c, f, 10.0f);
-    TEST_ASSERT_TRUE(st.bar[5] > 0.9f);
-    f.bands[5] = 0.0f;
+    TEST_ASSERT_TRUE(st.impact > 0.9f);
+    f.rms_fast = 0.0f;
     for (int k = 0; k < 40; ++k) fxAdvance(st, c, f, 10.0f);   // 400ms
-    TEST_ASSERT_TRUE_MESSAGE(st.bar[5] < 0.3f, "未锁定时没有衰减");
-    TEST_ASSERT_FALSE(isnan(st.bar[5]));
+    TEST_ASSERT_TRUE_MESSAGE(st.impact < 0.3f, "未锁定时没有衰减");
+    TEST_ASSERT_FALSE(isnan(st.impact));
 }
 
 // 连续拍点之间要落得下去，否则柱子会一直顶在天花板上。
@@ -309,11 +310,11 @@ void test_impact_returns_between_beats(void) {
     float lowest = 1.0f;
     for (int beat = 0; beat < 8; ++beat)
         for (int k = 0; k < 30; ++k) {        // 30 × 11.5ms ≈ 一拍
-            f.bands[2] = (k == 0) ? 1.0f : 0.0f;
+            f.rms_fast = (k == 0) ? 1.0f : 0.0f;
             fxAdvance(st, c, f, 11.5f);
-            if (beat > 2 && k > 20 && st.bar[2] < lowest) lowest = st.bar[2];
+            if (beat > 2 && k > 20 && st.impact < lowest) lowest = st.impact;
         }
-    TEST_ASSERT_TRUE_MESSAGE(lowest < 0.25f, "拍与拍之间没落下来 —— 柱子一直顶着");
+    TEST_ASSERT_TRUE_MESSAGE(lowest < 0.25f, "拍与拍之间没落下来 —— 亮度一直顶着");
 }
 
 // 状态不得被非有限输入污染。
@@ -322,12 +323,16 @@ void test_impact_rejects_non_finite(void) {
     AudioFrame f;
     f.beat_locked = true; f.bpm = 120.0f;
     for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.3f;
+    f.rms_fast = 0.3f;
     fxAdvance(st, c, f, 23.0f);
-    f.bands[4] = NAN; f.bands[7] = INFINITY;
+    f.bands[4] = NAN; f.bands[7] = INFINITY; f.rms_fast = NAN;
     fxAdvance(st, c, f, 23.0f);
     fxAdvance(st, c, f, NAN);                 // dt 也可能坏
+    TEST_ASSERT_FALSE_MESSAGE(isnan(st.impact), "NaN 渗进了整管冲击包络");
+    TEST_ASSERT_TRUE(st.impact >= 0.0f && st.impact <= 1.0f);
+    TEST_ASSERT_FALSE(isnan(st.hue));
     for (int i = 0; i < NUM_BANDS; ++i) {
-        TEST_ASSERT_FALSE_MESSAGE(isnan(st.bar[i]), "NaN 渗进了冲击包络");
+        TEST_ASSERT_FALSE_MESSAGE(isnan(st.bar[i]), "NaN 渗进了分段包络");
         TEST_ASSERT_TRUE(st.bar[i] >= 0.0f && st.bar[i] <= 1.0f);
     }
 }
@@ -359,6 +364,63 @@ void test_all_six_effects_render(void) {
     }
 }
 
+// 冲击柱**不能**是频段柱加个尾巴。
+//
+// 第一版就是那样：同样的 u→band 布局、同样的按段号取色，只是数据源换成了
+// 带衰减的包络。两个效果放在一起没有分工可言。
+// 这条从两个方向钉死区别：频谱形状变了它不该跟着变；整体响度变了它必须变。
+void test_impact_is_not_a_spectrum_plot(void) {
+    Geometry g; FxConfig c;
+    static Rgb a[TOTAL_LEDS], b[TOTAL_LEDS];
+
+    // 两帧总能量相同，但频谱形状完全相反
+    AudioFrame lo, hi;
+    lo.rms_fast = hi.rms_fast = 0.25f;
+    lo.peak = hi.peak = 0.3f;
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        lo.bands[i] = (i < 8) ? 0.5f : 0.0f;
+        hi.bands[i] = (i < 8) ? 0.0f : 0.5f;
+    }
+    FxState sa, sb;
+    for (int k = 0; k < 30; ++k) {            // 让色相收敛
+        fxRender(FX_BAR_IMPACT, sa, c, lo, g, false, 23.22f, a);
+        fxRender(FX_BAR_IMPACT, sb, c, hi, g, false, 23.22f, b);
+    }
+    int litA = 0, litB = 0;
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i) {
+        if (a[i].r || a[i].g || a[i].b) ++litA;
+        if (b[i].r || b[i].g || b[i].b) ++litB;
+    }
+    // 点亮范围取决于**冲击强度**，两帧强度一样就该一样宽 —— 频谱柱做不到这点
+    TEST_ASSERT_INT_WITHIN_MESSAGE(4, litA, litB,
+        "点亮范围随频谱形状变了 —— 又画成频谱图了");
+
+    // 反过来：整体响度变了，点亮范围必须跟着变
+    AudioFrame weak = lo; weak.rms_fast = 0.05f; weak.peak = 0.06f;
+    FxState sw;
+    static Rgb w[TOTAL_LEDS];
+    for (int k = 0; k < 30; ++k) fxRender(FX_BAR_IMPACT, sw, c, weak, g, false, 23.22f, w);
+    int litW = 0;
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i) if (w[i].r || w[i].g || w[i].b) ++litW;
+    TEST_ASSERT_TRUE_MESSAGE(litW < litA - 8,
+        "弱击打和强击打点亮范围一样 —— 冲击强度没有体现出来");
+}
+
+// 但它仍然该反映音色：色相跟频谱质心走，低沉偏暖、明亮偏冷。
+void test_impact_hue_follows_centroid(void) {
+    FxConfig c;
+    AudioFrame lo, hi;
+    lo.rms_fast = hi.rms_fast = 0.3f;
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        lo.bands[i] = (i < 4)  ? 0.6f : 0.0f;      // 低频
+        hi.bands[i] = (i > 11) ? 0.6f : 0.0f;      // 高频
+    }
+    FxState sa, sb;
+    for (int k = 0; k < 80; ++k) { fxAdvance(sa, c, lo, 23.22f); fxAdvance(sb, c, hi, 23.22f); }
+    TEST_ASSERT_TRUE_MESSAGE(sb.hue > sa.hue + 0.1f,
+        "高频内容没有让色相变冷 —— 质心没接上");
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_every_module_to_the_same_hop);
@@ -377,6 +439,8 @@ int main(int, char **) {
     RUN_TEST(test_impact_falls_back_when_unlocked);
     RUN_TEST(test_impact_returns_between_beats);
     RUN_TEST(test_impact_rejects_non_finite);
+    RUN_TEST(test_impact_is_not_a_spectrum_plot);
+    RUN_TEST(test_impact_hue_follows_centroid);
     RUN_TEST(test_all_six_effects_render);
     return UNITY_END();
 }
