@@ -15,8 +15,15 @@ HOST=${LAMP_HOST:?请先设置 LAMP_HOST（PersonalServices 里的规范 SSH 别
 DEST=${LAMP_DEST:-'~/lamp-sim'}
 TRIES=${TRIES:-5}
 
+# libwledfx 带**编好的二进制**过去，不在目标机重编。
+#
+# 理由：重编需要整个 wled00/（十几 MB 源码）跟着走，而这条 ZeroTier 链路
+# RTT 200ms+、时通时断。两台都是 arm64 macOS，动态库直接通用。
+# 换成别的架构/系统的目标机时，得改成同步源码 + 远端跑 build_wled.sh。
 FILES="usermods/lamp tools/lamp_capi.cpp tools/lamp_fft.h tools/server.py
        tools/build.sh tools/run.sh tools/sim/index.html"
+[ -f tools/libwledfx.dylib ] && FILES="$FILES tools/libwledfx.dylib"
+[ -f tools/libwledfx.so ]    && FILES="$FILES tools/libwledfx.so"
 
 # 输出落到临时文件再看，**不要**写成 `... | ssh ... | tail -4`：
 # 管道的退出码是最后一个命令的，而 tail 永远成功 —— ssh 连不上也会报
