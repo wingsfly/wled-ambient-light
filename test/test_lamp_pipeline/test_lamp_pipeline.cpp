@@ -1,5 +1,8 @@
 #include <unity.h>
 #include <math.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "lamp_fx.h"
 
 using namespace lamp;
@@ -173,9 +176,15 @@ static FxState g_fxst;
 static FxConfig g_fxcfg;
 // 跑到状态收敛再看结果。key-wash / chroma-ring 依赖平滑后的色度与底色，
 // 只渲染一帧的话它们还在从零往上爬，看着就是「几乎全黑」。
+// **头一帧带事件标志，后面不带。** 强拍/换段/唱句起音这类是单帧事件，
+// 把它们钉成常真会破坏「换段应当触发一次泛白」这类测试（我这么干过一次，
+// 两条彩色流动的测试当场红了）。事件驱动的效果要靠它们的包络活着，
+// 所以头一帧给一次事件，之后看包络还在不在。
 static void render(FxId e,const AudioFrame&f,const Geometry&g,bool wb,Rgb*o){
     g_fxst=FxState{};
-    for (int k=0;k<20;++k) fxRender(e,g_fxst,g_fxcfg,f,g,wb,23.22f,o); }
+    AudioFrame ev=f; ev.downbeat=true; ev.onset=true; ev.vocal_onset=true; ev.section_change=true;
+    fxRender(e,g_fxst,g_fxcfg,ev,g,wb,23.22f,o);
+    for (int k=0;k<19;++k) fxRender(e,g_fxst,g_fxcfg,f,g,wb,23.22f,o); }
 
 // 一帧「什么都有」的信号：能量、节拍、音高全带上。
 // 新增字段时补在这里，免得老测试因为字段是零而误判成效果坏了。
@@ -187,6 +196,16 @@ static AudioFrame liveFrame(void){
     f.key_root=0; f.key_conf=0.8f; f.centroid_hz=900.0f; f.harmony_move=0.1f;
     f.f0_hz=330.0f; f.f0_conf=0.8f; f.f0_voiced=true;
     f.mood=0.6f; f.energy_trend=0.3f; f.section_novelty=0.1f;
+    // 后加的特征。**夹具的含义是「音乐在放、各特征都在」** ——
+    // 漏掉哪一项，吃那一项的效果就会在「每个效果都要画得出东西」里报全黑，
+    // 而那是夹具旧了，不是效果坏了。加新特征时这里要一起补。
+    f.dynamics=0.8f; f.beats_per_bar=4; f.bar_pos=0; f.bar_index=3;
+    f.bar_conf=0.7f;
+    for (int i=0;i<NUM_BANDS;++i){ f.bands_h[i]=0.45f; f.bands_p[i]=0.25f; }
+    f.percussive=0.35f;
+    f.vocal=0.8f;
+    // **事件标志不放在稳态夹具里**（downbeat / onset / vocal_onset /
+    // section_change）—— 它们只该在某一帧为真。见 render() 上面的说明。
     return f;
 }
 
@@ -348,14 +367,17 @@ void test_impact_rejects_non_finite(void) {
     }
 }
 
-// 六个效果都要能画满、静音都要熄灭（beat-pulse 的呼吸底光除外）。
+// 每个效果都要能画满、静音都要熄灭（beat-pulse 的呼吸底光除外）。
 void test_all_effects_render(void) {
     Geometry g; FxState st; FxConfig c;
     const AudioFrame f = liveFrame();
-    TEST_ASSERT_EQUAL_INT_MESSAGE(10, (int)FX_COUNT, "效果数量变了，测试没跟上");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(23, (int)FX_COUNT, "效果数量变了，测试没跟上");
+    AudioFrame ev = f;
+    ev.downbeat = true; ev.onset = true; ev.vocal_onset = true; ev.section_change = true;
     for (int e = 0; e < FX_COUNT; ++e) {
         st = FxState{};
-        for (int w = 0; w < 12; ++w) fxRender((FxId)e, st, c, f, g, true, 23.22f, g_px);
+        fxRender((FxId)e, st, c, ev, g, true, 23.22f, g_px);      // 头一帧带事件
+        for (int w = 0; w < 11; ++w) fxRender((FxId)e, st, c, f, g, true, 23.22f, g_px);
         int lit = 0;
         for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
             if (g_px[i].r || g_px[i].g || g_px[i].b) ++lit;
@@ -825,6 +847,245 @@ void test_chroma_ring_moves_with_the_note(void) {
     }
 }
 
+
+// ══ 特征标签与风格推荐表 ══════════════════════════════════
+
+// **需求本身就是契约**：界面按音乐特性筛选，每类至少 5 个效果。
+// 写成测试，将来加减效果时立刻知道有没有把某一类掏空。
+void test_every_category_has_at_least_five_effects(void) {
+    const uint8_t tags[5] = {TAG_BEAT, TAG_MELODY, TAG_VOCAL, TAG_MOOD, TAG_SPECTRUM};
+    const char *nm[5] = {"beat", "melody", "vocal", "mood", "spectrum"};
+    for (int t = 0; t < 5; ++t) {
+        int n = 0;
+        for (int e = 0; e < FX_COUNT; ++e) if (fxTags((FxId)e) & tags[t]) ++n;
+        char msg[80];
+        snprintf(msg, sizeof msg, "%s 类只有 %d 个效果，少于 5 个", nm[t], n);
+        TEST_ASSERT_TRUE_MESSAGE(n >= 5, msg);
+    }
+}
+
+void test_every_effect_has_a_tag_and_a_genre(void) {
+    for (int e = 0; e < FX_COUNT; ++e) {
+        TEST_ASSERT_TRUE_MESSAGE(fxTags((FxId)e) != 0, "有效果没标特征，界面筛不到它");
+        TEST_ASSERT_TRUE_MESSAGE(fxGenres((FxId)e) != 0, "有效果没标风格");
+        TEST_ASSERT_TRUE_MESSAGE(fxName((FxId)e)[0] != '\0', "有效果没名字");
+        TEST_ASSERT_TRUE_MESSAGE(fxNameCn((FxId)e)[0] != '\0', "有效果没中文名");
+    }
+}
+
+void test_every_genre_has_at_least_four_effects(void) {
+    const uint8_t gs[5] = {GEN_CLASSICAL, GEN_POP, GEN_ROCK, GEN_RAP, GEN_EDM};
+    for (int t = 0; t < 5; ++t) {
+        int n = 0;
+        for (int e = 0; e < FX_COUNT; ++e) if (fxGenres((FxId)e) & gs[t]) ++n;
+        TEST_ASSERT_TRUE_MESSAGE(n >= 4, "有风格推荐不足 4 个效果");
+    }
+}
+
+// 名字不能重复 —— 界面拿名字当键，重了就会选错。
+void test_effect_names_are_unique(void) {
+    for (int a = 0; a < FX_COUNT; ++a)
+        for (int b = a + 1; b < FX_COUNT; ++b) {
+            TEST_ASSERT_TRUE_MESSAGE(strcmp(fxName((FxId)a), fxName((FxId)b)) != 0, "英文名重复");
+            TEST_ASSERT_TRUE_MESSAGE(strcmp(fxNameCn((FxId)a), fxNameCn((FxId)b)) != 0, "中文名重复");
+        }
+}
+
+// ══ 新效果的区分性 ════════════════════════════════════════
+//
+// 通用不变量（画满、静音熄灭、不越界）对所有效果自动生效；
+// 这里每条钉的是「这个效果凭什么和别的不一样」—— 没有这条，
+// 新效果就只是换了个名字的旧效果。
+
+static int litCount(void) {
+    int n = 0;
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i) if (g_px[i].r || g_px[i].g || g_px[i].b) ++n;
+    return n;
+}
+static long brightness(void) {
+    long v = 0;
+    for (uint16_t i = 0; i < TOTAL_LEDS; ++i) v += g_px[i].r + g_px[i].g + g_px[i].b;
+    return v;
+}
+// 跑一串帧：头一帧用 ev（可带事件标志），其余用 f
+static void runFx(FxId e, const AudioFrame &ev, const AudioFrame &f, int n) {
+    Geometry g;
+    g_fxst = FxState{};
+    fxRender(e, g_fxst, g_fxcfg, ev, g, false, 23.22f, g_px);
+    for (int k = 1; k < n; ++k) fxRender(e, g_fxst, g_fxcfg, f, g, false, 23.22f, g_px);
+}
+static void more(FxId e, const AudioFrame &f, int n) {
+    Geometry g;
+    for (int k = 0; k < n; ++k) fxRender(e, g_fxst, g_fxcfg, f, g, false, 23.22f, g_px);
+}
+
+// 强拍绽放：强拍必须比普通起音铺得更开 —— 否则它和冲击柱没区别。
+void test_downbeat_bloom_reaches_further_than_a_weak_beat(void) {
+    AudioFrame f = liveFrame(), down = f, weak = f;
+    down.downbeat = true; down.onset = true;
+    weak.downbeat = false; weak.onset = true;
+    runFx(FX_DOWNBEAT_BLOOM, down, f, 3);
+    const int wide = litCount();
+    runFx(FX_DOWNBEAT_BLOOM, weak, f, 3);
+    const int narrow = litCount();
+    TEST_ASSERT_TRUE_MESSAGE(wide > narrow * 2, "强拍必须明显比弱拍铺得开");
+}
+
+// 小节阶梯：拍号看得出来。3/4 的第一段占管长 1/3，4/4 只占 1/4。
+void test_bar_ladder_shows_the_time_signature(void) {
+    AudioFrame a = liveFrame(), b = liveFrame();
+    a.beats_per_bar = 4; a.bar_pos = 0;
+    b.beats_per_bar = 3; b.bar_pos = 0;
+    runFx(FX_BAR_LADDER, a, a, 2); const long ba = brightness();
+    runFx(FX_BAR_LADDER, b, b, 2); const long bb = brightness();
+    TEST_ASSERT_TRUE_MESSAGE(bb > ba, "3/4 的第一拍段应当比 4/4 的更长");
+}
+
+// 鼓组分离吃的是**打击路**，不是混合谱 —— 这是它与高低分离的分别。
+void test_kick_snare_reads_the_percussive_path_only(void) {
+    AudioFrame f = liveFrame();
+    for (int i = 0; i < NUM_BANDS; ++i) { f.bands_p[i] = 0.0f; f.bands[i] = 0.9f; }
+    runFx(FX_KICK_SNARE, f, f, 10);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, litCount(), "打击路为零时不该有画面，哪怕混合谱很响");
+    for (int i = 0; i < 4; ++i) f.bands_p[i] = 0.9f;      // 只有底鼓
+    runFx(FX_KICK_SNARE, f, f, 10);
+    TEST_ASSERT_TRUE_MESSAGE(litCount() > 5, "底鼓应当点亮管底");
+}
+
+// 音高彗星的余辉必须比旋律线**衰减得慢** —— 否则两个效果是同一个。
+//
+// ⚠️ 判据是**衰减比例**，不是总亮度。初稿比的是总亮度，红了：
+// 旋律线每帧铺 4 颗、彗星只铺 1 颗，那样比的是「铺得宽不宽」，
+// 不是「留得久不久」—— 名字断言了一个它并不检验的性质（第 17 条）。
+void test_pitch_comet_leaves_a_longer_trail_than_melody_line(void) {
+    AudioFrame f = liveFrame(), quiet = f;
+    quiet.f0_voiced = false;                       // 停止发声，只剩拖尾
+    // **基线要在彗头退掉之后取。** 彗星的头是一团辉光，停止发声那一刻整个
+    // 消失，把它算进基线的话量到的是「头占多大比例」，不是拖尾衰减多快 ——
+    // 初稿就是这么写的，红了。先空跑 6 帧让头退干净，再开始比。
+    runFx(FX_PITCH_COMET, f, f, 6);   more(FX_PITCH_COMET, quiet, 6);
+    const double cp = (double)brightness();
+    more(FX_PITCH_COMET, quiet, 12);
+    const double cr = (double)brightness() / (cp > 0 ? cp : 1.0);
+    runFx(FX_MELODY_LINE, f, f, 6);   more(FX_MELODY_LINE, quiet, 6);
+    const double mp = (double)brightness();
+    more(FX_MELODY_LINE, quiet, 12);
+    const double mr = (double)brightness() / (mp > 0 ? mp : 1.0);
+    // 实测：彗星 0.94、旋律线 0.79（拖尾数组本身按 τ=900ms/500ms 衰减，
+    // 12 帧 279ms 理论保留 0.734/0.574，与实测一致）。加法余量 0.10 有富余。
+    TEST_ASSERT_TRUE_MESSAGE(cr > mr + 0.10,
+        "同样停止发声，彗星保留的比例应当明显高于旋律线");
+}
+
+// 和声推移的色相由调决定 —— 换调画面必须换色。
+void test_harmony_shift_hue_follows_the_key(void) {
+    AudioFrame c = liveFrame(), fs = liveFrame();
+    c.key_root = 0; fs.key_root = 6;               // C 与 升F，色环上正对面
+    runFx(FX_HARMONY_SHIFT, c, c, 400);
+    const Rgb a = g_px[TOTAL_LEDS / 4];
+    runFx(FX_HARMONY_SHIFT, fs, fs, 400);
+    const Rgb b = g_px[TOTAL_LEDS / 4];
+    const int d = abs((int)a.r - (int)b.r) + abs((int)a.g - (int)b.g) + abs((int)a.b - (int)b.b);
+    TEST_ASSERT_TRUE_MESSAGE(d > 60, "换调之后和声推移的颜色必须明显不同");
+}
+
+// ── 人声类 ──
+
+void test_vocal_halo_brightness_follows_the_vocal_score(void) {
+    AudioFrame hi = liveFrame(), lo = liveFrame();
+    hi.vocal = 0.95f; lo.vocal = 0.05f;
+    runFx(FX_VOCAL_HALO, hi, hi, 60); const long bh = brightness();
+    runFx(FX_VOCAL_HALO, lo, lo, 60); const long bl = brightness();
+    TEST_ASSERT_TRUE_MESSAGE(bh > bl * 3, "人声强时光晕必须明显更亮更宽");
+}
+
+void test_vocal_breath_dims_in_instrumental_sections(void) {
+    AudioFrame sing = liveFrame(), inst = liveFrame();
+    sing.vocal = 0.9f; inst.vocal = 0.0f;
+    runFx(FX_VOCAL_BREATH, sing, sing, 60); const long bs = brightness();
+    runFx(FX_VOCAL_BREATH, inst, inst, 60); const long bi = brightness();
+    TEST_ASSERT_TRUE_MESSAGE(bs > bi * 2, "器乐段落必须明显暗下去");
+    TEST_ASSERT_TRUE_MESSAGE(bi > 0, "但也不该全黑 —— 那看起来像灯坏了");
+}
+
+// 共振峰带只吃谐波路，且只吃 300–3000Hz 那几段。
+void test_formant_ribbon_ignores_the_percussive_path(void) {
+    AudioFrame f = liveFrame();
+    for (int i = 0; i < NUM_BANDS; ++i) { f.bands_h[i] = 0.0f; f.bands_p[i] = 0.9f; }
+    runFx(FX_FORMANT_RIBBON, f, f, 4);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, litCount(), "谐波路为零时不该有画面，哪怕打击路很响");
+}
+
+void test_formant_ribbon_only_reads_the_vocal_band(void) {
+    AudioFrame lowOnly = liveFrame(), inBand = liveFrame();
+    for (int i = 0; i < NUM_BANDS; ++i) { lowOnly.bands_h[i] = 0.0f; inBand.bands_h[i] = 0.0f; }
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        const float cf = bandCenterHz(i);
+        if (cf < 300.0f)                   lowOnly.bands_h[i] = 0.9f;
+        if (cf >= 300.0f && cf <= 3000.0f) inBand.bands_h[i]  = 0.9f;
+    }
+    runFx(FX_FORMANT_RIBBON, lowOnly, lowOnly, 4); const long bl = brightness();
+    runFx(FX_FORMANT_RIBBON, inBand,  inBand,  4); const long bi = brightness();
+    TEST_ASSERT_TRUE_MESSAGE(bi > bl * 4, "只有 300–3000Hz 那几段该点亮这条带子");
+}
+
+// 两根管各说一件事：左管谐波、右管打击。这是这台灯有两根管才做得到的。
+void test_duet_split_puts_harmonic_left_and_percussive_right(void) {
+    Geometry g;
+    AudioFrame f = liveFrame();
+    for (int i = 0; i < NUM_BANDS; ++i) { f.bands_h[i] = 0.9f; f.bands_p[i] = 0.0f; }
+    runFx(FX_DUET_SPLIT, f, f, 4);
+    long left = 0, right = 0;
+    for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+        const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+        const Rgb l = g_px[mapPixel(g, SIDE_L, u)], r = g_px[mapPixel(g, SIDE_R, u)];
+        left  += l.r + l.g + l.b;
+        right += r.r + r.g + r.b;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(left > 0 && right == 0, "只有谐波时应当只有左管亮");
+}
+
+// 唱句脉冲画的是**乐句起点**，不是人声的持续 —— 起音后必须退下去。
+void test_lyric_pulse_decays_between_phrases(void) {
+    AudioFrame f = liveFrame(), ev = f;
+    ev.vocal_onset = true;
+    runFx(FX_LYRIC_PULSE, ev, f, 2);
+    const long peak = brightness();
+    more(FX_LYRIC_PULSE, f, 60);
+    TEST_ASSERT_TRUE_MESSAGE(peak > 0, "唱句起音时应当亮起来");
+    TEST_ASSERT_TRUE_MESSAGE(brightness() < peak / 4, "句与句之间必须退下去");
+}
+
+// ── 氛围类 ──
+
+void test_section_tide_sweeps_only_on_a_section_change(void) {
+    AudioFrame f = liveFrame(), ev = f;
+    ev.section_change = true;
+    runFx(FX_SECTION_TIDE, ev, f, 4);
+    const long during = brightness();
+    more(FX_SECTION_TIDE, f, 200);
+    TEST_ASSERT_TRUE_MESSAGE(during > brightness(), "换段那一下应当比段内亮");
+}
+
+void test_mood_gradient_hue_follows_the_mood(void) {
+    AudioFrame calm = liveFrame(), wild = liveFrame();
+    calm.mood = 0.0f; wild.mood = 1.0f;
+    runFx(FX_MOOD_GRADIENT, calm, calm, 4);
+    const Rgb c = g_px[TOTAL_LEDS / 3];
+    runFx(FX_MOOD_GRADIENT, wild, wild, 4);
+    const Rgb w = g_px[TOTAL_LEDS / 3];
+    TEST_ASSERT_TRUE_MESSAGE(w.r > c.r && c.b > w.b, "静应当偏冷、躁应当偏暖");
+}
+
+// 极光是唯一一个**不追随瞬时声音**的效果：响度差 18 倍画面也不该跟着变。
+void test_slow_aurora_ignores_the_instantaneous_level(void) {
+    AudioFrame soft = liveFrame(), loud = liveFrame();
+    soft.rms_fast = 0.05f; loud.rms_fast = 0.9f;
+    runFx(FX_SLOW_AURORA, soft, soft, 4); const long bs = brightness();
+    runFx(FX_SLOW_AURORA, loud, loud, 4); const long bl = brightness();
+    TEST_ASSERT_TRUE_MESSAGE(labs(bs - bl) < bs / 8, "极光不该跟着瞬时响度变");
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_every_module_to_the_same_hop);
@@ -864,5 +1125,23 @@ int main(int, char **) {
     RUN_TEST(test_fx_smoothing_is_defined_in_physical_time);
     RUN_TEST(test_chroma_ring_maps_pitch_class_not_frequency);
     RUN_TEST(test_chroma_ring_moves_with_the_note);
+    RUN_TEST(test_every_category_has_at_least_five_effects);
+    RUN_TEST(test_every_effect_has_a_tag_and_a_genre);
+    RUN_TEST(test_every_genre_has_at_least_four_effects);
+    RUN_TEST(test_effect_names_are_unique);
+    RUN_TEST(test_downbeat_bloom_reaches_further_than_a_weak_beat);
+    RUN_TEST(test_bar_ladder_shows_the_time_signature);
+    RUN_TEST(test_kick_snare_reads_the_percussive_path_only);
+    RUN_TEST(test_pitch_comet_leaves_a_longer_trail_than_melody_line);
+    RUN_TEST(test_harmony_shift_hue_follows_the_key);
+    RUN_TEST(test_vocal_halo_brightness_follows_the_vocal_score);
+    RUN_TEST(test_vocal_breath_dims_in_instrumental_sections);
+    RUN_TEST(test_formant_ribbon_ignores_the_percussive_path);
+    RUN_TEST(test_formant_ribbon_only_reads_the_vocal_band);
+    RUN_TEST(test_duet_split_puts_harmonic_left_and_percussive_right);
+    RUN_TEST(test_lyric_pulse_decays_between_phrases);
+    RUN_TEST(test_section_tide_sweeps_only_on_a_section_change);
+    RUN_TEST(test_mood_gradient_hue_follows_the_mood);
+    RUN_TEST(test_slow_aurora_ignores_the_instantaneous_level);
     return UNITY_END();
 }
