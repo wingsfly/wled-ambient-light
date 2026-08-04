@@ -105,15 +105,16 @@ void test_one_factor_alone_cannot_carry_the_score(void) {
 void test_formant_share_counts_partial_bands_by_frequency_span(void) {
     C = VocalConfig{};
     float h[NUM_BANDS] = {0};
-    // 第 4 段是 301.46–430.66Hz，整段都在 [300,3000] 内 → 全额计入
+    // 第 4 段是 301.46–430.66Hz，整段都在 [200,3000] 内 → 全额计入
     h[4] = 1.0f;
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.0f, formantShare(C, h));
 
-    // 第 3 段是 215.33–301.46Hz，只有 301.46-300=1.46Hz 落在区间内
+    // 第 2 段是 129.20–215.33Hz，只有 215.33-200=15.33Hz 落在区间内
+    // → 15.33/86.13 = 0.178
     for (int i = 0; i < NUM_BANDS; ++i) h[i] = 0.0f;
-    h[3] = 1.0f;
+    h[2] = 1.0f;
     const float part = formantShare(C, h);
-    TEST_ASSERT_TRUE_MESSAGE(part > 0.0f && part < 0.05f,
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.01f, 0.178f, part,
         "跨界的段应当按频率跨度比例计入，不是非零即一");
 }
 
@@ -142,12 +143,12 @@ void test_formant_threshold_sits_between_a_dense_mix_and_a_voice(void) {
 
     spectrumFlat(h, 1.0f);                                   // 每段等能量：密集混音
     const float dense = formantShare(C, h);
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.500f, dense);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.572f, dense);
 
     for (int i = 0; i < NUM_BANDS; ++i)                      // 每 Hz 等能量：白噪声
         h[i] = kBandEdgeHz[i + 1] - kBandEdgeHz[i];
     const float white = formantShare(C, h);
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.293f, white);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.304f, white);
 
     spectrumIn(h, 300.0f, 3000.0f, 1.0f);                    // 纯人声
     const float voice = formantShare(C, h);
@@ -156,20 +157,37 @@ void test_formant_threshold_sits_between_a_dense_mix_and_a_voice(void) {
     spectrumIn(h, 300.0f, 3000.0f, 1.0f);                    // 人声 + 全频段底噪
     for (int i = 0; i < NUM_BANDS; ++i) h[i] += 0.5f;
     const float mixed = formantShare(C, h);
-    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.748f, mixed);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.785f, mixed);
 
     // **断言门的输出，不是 share 与门槛谁大谁小。** 门槛正好定在密集混音
     // 那条参考线上（0.50），比大小是在比浮点擦边；真正要保证的是
     // 「密集混音过不去、人声过得去」。
     TEST_ASSERT_EQUAL_FLOAT_MESSAGE(0.0f, vocalGate(white, C.formant_share_min),
         "白噪声必须被挡住");
-    TEST_ASSERT_TRUE_MESSAGE(vocalGate(dense, C.formant_share_min) < 0.02f,
-        "密集混音几乎不该过门");
     TEST_ASSERT_TRUE_MESSAGE(vocalGate(mixed, C.formant_share_min) > 0.4f,
         "压着底噪的人声必须明显过门");
-    // 真实音乐实测 0.624 —— 必须落在两者之间，否则这个门在真机上没用。
+    // **密集混音现在能过一点门（0.14），这是有意的。**
+    // 下界从 300 降到 200 是为了让语音过得去（第 3 段 215–301Hz 是元音的
+    // 第一共振峰所在），代价就是这一项不再单独挡住密集混音。
+    // 拒绝改由三者组合完成 —— 见下面那条。
+    TEST_ASSERT_TRUE_MESSAGE(vocalGate(dense, C.formant_share_min) < 0.25f,
+        "密集混音过门也该很有限");
+    // **真实素材的实测值钉在这里** —— 这是防止再次「拿合成素材标定」的护栏。
+    // 30 秒真实音乐 0.624、12 秒中文会议发言 0.579（都在 200–3000Hz 口径下）。
+    // 初版门槛 0.62 把这两个全掐死了，三个人声灯效因此全程不亮。
     TEST_ASSERT_TRUE_MESSAGE(vocalGate(0.624f, C.formant_share_min) > 0.15f,
-        "真实音乐（实测共振峰占比 0.624）必须能过门，不能像旧门槛 0.62 那样被掐死");
+        "真实音乐的共振峰占比必须能过门");
+    TEST_ASSERT_TRUE_MESSAGE(vocalGate(0.579f, C.formant_share_min) > 0.10f,
+        "真实语音的共振峰占比必须能过门 —— 用户就是拿会议录音试的");
+}
+
+// 承上：共振峰这一个门不再单独挡住密集混音，那就得证明**组合**挡得住。
+// 没有基频的密集混音（一段没人声的编曲）必须仍然判为 0。
+void test_a_voiceless_dense_mix_is_still_rejected_by_the_combination(void) {
+    reset();
+    float h[NUM_BANDS]; spectrumFlat(h, 1.0f);
+    const float v = run(3000.0f, 220.0f, 0.9f, false, h, 0.5f);   // 无基频
+    TEST_ASSERT_TRUE_MESSAGE(v < 0.05f, "没有基频的密集混音必须判为 0");
 }
 
 // ── 时间常数按物理时间定 ───────────────────────────────────
@@ -295,6 +313,7 @@ int main(void) {
     RUN_TEST(test_formant_share_of_silence_is_zero);
     RUN_TEST(test_formant_share_ignores_nan_and_negative_bands);
     RUN_TEST(test_formant_threshold_sits_between_a_dense_mix_and_a_voice);
+    RUN_TEST(test_a_voiceless_dense_mix_is_still_rejected_by_the_combination);
     RUN_TEST(test_rise_time_is_defined_in_physical_time);
     RUN_TEST(test_release_is_slower_than_attack);
     RUN_TEST(test_onset_fires_once_per_vocal_entry);
