@@ -15,6 +15,7 @@
 #include <math.h>
 #include <algorithm>
 #include <type_traits>
+#include <utility>
 
 // wled_math.cpp 只 include 了 Arduino.h，PI 一族要在这里给全
 #ifndef PI
@@ -112,8 +113,24 @@ static inline SemaphoreHandle_t xSemaphoreCreateRecursiveMutex()   { return null
 class __FlashStringHelper;
 
 #ifndef min
-template <class T, class U> constexpr auto min(T a, U b) -> decltype(a < b ? a : b) { return a < b ? a : b; }
-template <class T, class U> constexpr auto max(T a, U b) -> decltype(a > b ? a : b) { return a > b ? a : b; }
+// ⚠️ **返回类型必须 decay。**
+//
+// 写成 `-> decltype(a < b ? a : b)` 是错的：a、b 是按值形参，也就是**左值**，
+// 于是那个条件表达式也是左值，decltype 得到的是 `T&` —— 函数返回的是
+// 指向自己形参的**悬垂引用**。-O0 下栈槽碰巧还没被覆盖，看着是对的；
+// -O2 下编译器认定 UB，直接把整个调用折成常量。
+//
+// 实际后果：`calculateNumberOfSources1D()` 被折成 `mov w0, #0; ret`，
+// 粒子系统按 0 个 source 申请内存、却按 16 个去写 —— 就是 PS GEQ 1D 的越界。
+// 而 WLED 里几乎每个效果都在用 min/max，这个 bug 是全局性的，
+// 只是别处碰巧没折出可见的错。下面的 static_assert 是它的看门狗。
+template <class T, class U> constexpr typename std::decay<decltype(true ? std::declval<T>() : std::declval<U>())>::type
+min(T a, U b) { return a < b ? a : b; }
+template <class T, class U> constexpr typename std::decay<decltype(true ? std::declval<T>() : std::declval<U>())>::type
+max(T a, U b) { return a > b ? a : b; }
+static_assert(std::is_same<decltype(min(1, 2)), int>::value,   "min 必须按值返回，不能是引用");
+static_assert(std::is_same<decltype(max(1, 2)), int>::value,   "max 必须按值返回，不能是引用");
+static_assert(min(3, 9) == 3 && max(3, 9) == 9, "min/max 语义错了");
 #endif
 #define constrain(x, lo, hi) ((x) < (lo) ? (lo) : ((x) > (hi) ? (hi) : (x)))
 // **不要 #define abs** —— 它会把 std::abs 也砸掉（FX.cpp 2084 行用了）。
@@ -150,10 +167,29 @@ static inline uint32_t hostFxRand() {
 // wled.h 把 REG_READ(WDEV_RND_REG) 指到上面的 hostFxRand()。
 
 // ── 日志与芯片信息：全部吞掉 ──────────────────────────────
+#include <iostream>
+// 上游自带 PSPRINT/PSPRINTLN 一族仪表。排查粒子系统时把下面的
+// HOSTFX_SERIAL_TO_STDERR 打开、编译加 -DWLED_DEBUG_PS，就能直接读到
+// 它自己报的粒子数与指针 —— 比在外面按 malloc 尺寸反推靠谱得多。
+// （DEC/HEX 一族与两参重载是 PSPRINT 需要的，平时空转，别删。）
+#ifndef HOSTFX_SERIAL_TO_STDERR
+#define HOSTFX_SERIAL_TO_STDERR 0
+#endif
+enum { DEC = 10, HEX = 16, BIN = 2, OCT = 8 };
 struct HostSerial {
+#if HOSTFX_SERIAL_TO_STDERR
+    template <class T> void print(T v)        { std::cerr << v; }
+    template <class T> void print(T v, int)   { std::cerr << std::hex << v << std::dec; }
+    template <class T> void println(T v)      { std::cerr << v << "\n"; }
+    template <class T> void println(T v, int) { std::cerr << std::hex << v << std::dec << "\n"; }
+    void println()                            { std::cerr << "\n"; }
+#else
     template <class T> void print(T)        {}
+    template <class T> void print(T, int)   {}
     template <class T> void println(T)      {}
+    template <class T> void println(T, int) {}
     void println()                          {}
+#endif
     template <class... A> void printf(A...) {}
     void begin(...)                         {}
     operator bool() const { return false; }
