@@ -123,11 +123,31 @@ def wled_catalog(w, pal, mode, cols):
                     "c": cf.get(i, -1)})
     return {"modes": out, "palettes": w.wledfx_palette_count(), "pals": pals}
 
+def fx_catalog():
+    """音乐律动那半边的灯效目录。名字、中文名、特征标签、风格推荐
+    全来自 usermods/lamp/lamp_fx.h 的那一份表 —— 页面里不再有第二份。"""
+    lib = Handler.lib
+    return {"fx": [{
+        "i": i,
+        "n": lib.lamp_fx_name_cn(i).decode("utf-8", "replace"),
+        "e": lib.lamp_fx_name(i).decode("utf-8", "replace"),
+        "t": lib.lamp_fx_tags(i),          # 位掩码 1节拍 2旋律 4人声 8氛围 16频谱
+        "g": lib.lamp_fx_genres(i),        # 位掩码 1古典 2流行 4摇滚 8Rap 16电子
+    } for i in range(lib.lamp_fx_count())]}
+
 def load():
     if not os.path.exists(LIB):
         sys.exit(f"找不到 {LIB}\n先构建：\n  cd {HERE} && ./build.sh")
     lib = C.CDLL(LIB)
     lib.lamp_create.restype = C.c_void_p
+    # 灯效目录：名字与标签只有 lamp_fx.h 那一份真相，页面不再手抄
+    lib.lamp_fx_count.restype = C.c_int32
+    for n in ("lamp_fx_name", "lamp_fx_name_cn"):
+        getattr(lib, n).restype = C.c_char_p
+        getattr(lib, n).argtypes = [C.c_int32]
+    for n in ("lamp_fx_tags", "lamp_fx_genres"):
+        getattr(lib, n).restype = C.c_int32
+        getattr(lib, n).argtypes = [C.c_int32]
     lib.lamp_destroy.argtypes = [C.c_void_p]
     lib.lamp_set_effect.argtypes = [C.c_void_p, C.c_int32, C.c_int32]
     lib.lamp_lock_preset.argtypes = [C.c_void_p, C.c_int32]
@@ -287,6 +307,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         # 固定灯效：一问一答的 HTTP，不走 WebSocket。
         # 它不需要实时音频，页面按自己的节奏拉帧就行 —— 少一条长连接少一处状态。
+        if self.path == "/fx/catalog":
+            return self._json(fx_catalog())
         if self.path.startswith("/wled/"):
             return self.do_wled()
         if self.headers.get("Upgrade", "").lower() == "websocket":

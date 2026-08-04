@@ -109,6 +109,19 @@ float lamp_sample_rate(void) { return kSampleRate; }
 int32_t lamp_num_bands(void) { return NUM_BANDS; }
 int32_t lamp_num_leds(void)  { return TOTAL_LEDS; }
 
+// ── 灯效目录 ──────────────────────────────────────────────
+//
+// **页面不再自己抄一份效果名。** 之前 index.html 里有个手写的 FXNAMES
+// 数组，加一个效果就要改两处，而且没有任何东西保证它们一致。
+// 名字、中文名、特征标签、风格推荐全从 lamp_fx.h 那一份表出。
+int32_t     lamp_fx_count(void)          { return (int32_t)FX_COUNT; }
+const char *lamp_fx_name(int32_t i)      { return (i >= 0 && i < FX_COUNT) ? fxName((FxId)i) : ""; }
+const char *lamp_fx_name_cn(int32_t i)   { return (i >= 0 && i < FX_COUNT) ? fxNameCn((FxId)i) : ""; }
+// 位掩码：1=节拍 2=旋律 4=人声 8=氛围 16=频谱
+int32_t     lamp_fx_tags(int32_t i)      { return (i >= 0 && i < FX_COUNT) ? (int32_t)fxTags((FxId)i) : 0; }
+// 位掩码：1=古典 2=流行 4=摇滚 8=Rap 16=电子
+int32_t     lamp_fx_genres(int32_t i)    { return (i >= 0 && i < FX_COUNT) ? (int32_t)fxGenres((FxId)i) : 0; }
+
 // 喂一批样本，尽可能多地产出分析帧。
 //
 // 返回本次产出的帧数，最多 max_out。样本按 hop 步进消费，剩余的留在环里
