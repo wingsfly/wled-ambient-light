@@ -24,3 +24,7 @@ grep -rn "\[lamp-fork\]" wled00/
 | 补丁 | 文件 | 状态 |
 |---|---|---|
 | [0001](0001-ps-dancing-shadows-sprayemit.md) | `wled00/FX.cpp` | 待上游修复 |
+
+另见 [`upstream-findings.md`](upstream-findings.md)：在上游发现、**暂不向上游反馈**
+的问题清单（含可直接粘贴的英文报告草稿）。里面有一条是查到了但**故意不修**的 ——
+不修也要留记录，否则下次再查一遍。
