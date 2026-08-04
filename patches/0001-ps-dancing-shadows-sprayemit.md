@@ -51,12 +51,17 @@ if (partidx >= 0) PartSys->particles[partidx].ttl = ttl;
 就是 `sprayEmit()` 返回 `-1` 的本意，画面上看不出区别；改门槛要重排循环结构，
 改动面大得多，跟上游合并时也更容易冲突。
 
+## 上游反馈
+
+**暂不提 issue/PR**（项目主人的决定）。理由与可直接粘贴的英文报告草稿见
+[`upstream-findings.md`](upstream-findings.md) 的 U1 —— 想提的时候不用重查一遍。
+
 ## 顺带发现（**没有**修）
 
 `FXparticleSystem.cpp:217` `ParticleSystem2D::flameEmit()` 写的是
 `if (emitIndex > 0)` 而不是 `>= 0`，于是 0 号粒子拿不到 ttl 加成。
-这是个良性的差一错误，不涉及内存安全，而且是二维专用（这台灯用不到）。
-多改一行就多一处合并冲突，不值得。
+良性差一错误，不涉内存安全，且是二维专用（这台灯用不到）。
+记在 [`upstream-findings.md`](upstream-findings.md) 的 U2。
 
 ## 验证
 
