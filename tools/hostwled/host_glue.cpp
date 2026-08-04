@@ -187,31 +187,18 @@ int32_t wledfx_mode_count(void)    { return (int32_t)strip.getModeCount(); }
 
 // 主机端跑不了的效果 —— 返回 1 表示「界面里灰掉」。
 //
-// 目前只有一个：「PS Dancing Shadows」。**这是上游的 bug，不是移植垫片的**：
-//
-//   FX.cpp  uint32_t partidx = PartSys->sprayEmit(PartSys->sources[0]);
-//           PartSys->particles[partidx].ttl = ttl;
-//
-// `ParticleSystem1D::sprayEmit()` 找不到死粒子时返回 **-1**，调用处却用
-// uint32_t 接下来直接当下标。而它的准入门槛是 `deadparticles > 5`（≥6 颗），
-// 循环却要发 `width = hw_random16(1,10)` 最多 9 颗 —— 第 7 颗必然踩空。
-// 实测崩溃现场：deadparticles=6、width=9、usedParticles=49。
-//
-// 64 位主机上 0xFFFFFFFF 零扩展成 +34GB，直接段错误；ESP32 上 32 位指针
-// 算术回绕成 particles[-1]，**真机不崩，只是悄悄改写 ParticleSystem1D
-// 结构体尾部** —— 所以上游一直没发现。这里如实灰掉，不假装它能用。
-//
-// 曾经还屏蔽过「PS GEQ 1D」，那个是**我自己的锅**：Arduino.h 里的 min/max
-// 垫片返回了悬垂引用，-O2 下把 calculateNumberOfSources1D() 折成常量 0，
-// 于是按 0 个 source 申请内存、按 16 个去写。已修，见该文件的说明。
-//
-// 另外「Copy Segment」也灰掉，但那是**模拟器的限制不是效果的缺陷**：
+// 只剩一个「Copy Segment」，而且那是**模拟器的限制不是效果的缺陷**：
 // 它要从另一个段取像素，而这里只建了一个 96 颗的段，画面必然全黑。
+//
+// 曾经屏蔽过的两个都已修好，都不是上游效果本身的问题：
+//   · PS GEQ 1D —— **我的锅**。Arduino.h 里 min/max 垫片返回悬垂引用，
+//     -O2 下把 calculateNumberOfSources1D() 折成常量 0，于是按 0 个 source
+//     申请内存、按 16 个去写。见该文件的说明。
+//   · PS Dancing Shadows —— **上游的 bug**，已在 fork 里修（patches/0001）：
+//     sprayEmit() 找不到死粒子时返回 -1，调用处却用 uint32_t 接了当下标。
 int32_t wledfx_mode_blocked(int32_t i) {
     const char *d = wledfx_mode_data(i);
-    if (!d) return 0;
-    return (strncmp(d, "PS Dancing Shadows", 18) == 0 ||
-            strncmp(d, "Copy Segment", 12) == 0) ? 1 : 0;
+    return (d && strncmp(d, "Copy Segment", 12) == 0) ? 1 : 0;
 }
 int32_t wledfx_palette_count(void) { return (int32_t)getPaletteCount(); }
 
