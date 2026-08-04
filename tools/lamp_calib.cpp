@@ -74,18 +74,25 @@ static float edm(float t,int i){
 static float gen(int which,float t,int i){
   switch(which){case 0:return classical(t);case 1:return pop(t,i);
   case 2:return rockCore(t,i,false);case 3:return rockCore(t,i,true);
-  case 4:return rap(t,i);default:return edm(t,i);} }
+  case 4:return rap(t,i);case 5:return edm(t,i);
+  // 摇滚，人声每 8 秒开关一次 —— **这才是真实情形**。
+  // 「人声全程都在」的素材（case 3）里没有无人声的参照段，
+  // 相对通路本来就该报 0；能不能在交替时抓到，才是它的判据。
+  default:return rockCore(t,i,fmodf(t,16.0f)<8.0f);} }
 
 int main(int argc,char**argv){
   const float RUN_MS = (argc>1)?(float)atof(argv[1]):45000.0f;
-  const char* NM[6]={"古典·柔板","流行","摇滚·器乐","摇滚·人声","Rap","电子"};
+  const char* NM[7]={"古典·柔板","流行","摇滚·器乐","摇滚·人声","Rap","电子","摇滚·断续人声"};
+  double VS[7]={0},VF[7]={0},VC[7]={0},VH[7]={0},VP[7]={0},VD[7]={0};
+  double VA[7]={0};
   const char* FX[10]={"频段柱","拍点脉冲","电平扫描","冲击柱","拍点光点","高低分离","调性染色","音级环","彩色流动","旋律线"};
   printf("%-12s %7s %6s %6s %7s %5s %5s  %s %6s | %s\n","","perc","split","f0占","抖动/s","锁定","调性","档","时长","自动选中(五个分数)");
-  for(int w=0;w<6;++w){
+  for(int w=0;w<7;++w){
     static Pipeline P; static PipelineConfig PC; static AutoState A; static AutoConfig AC;
     P=Pipeline{}; A=AutoState{};
     pipelineInit(P,PC,STYLE_GENERAL); autoInit(A,AC,presetHopMs(STYLE_GENERAL));
     size_t consumed=0; float lock=0, key=0; int ps=1; uint32_t tend=0;
+    double vsum=0,fsum=0,csum=0,hsum=0,psum=0,asum=0; long vn=0,vhi=0;
     const int NFR=(int)(RUN_MS/presetHopMs(STYLE_GENERAL));
     for(int frame=0;frame<NFR;++frame){
       const size_t n=P.an.n;
@@ -94,6 +101,10 @@ int main(int argc,char**argv){
       const uint32_t t_ms=(uint32_t)((double)consumed*1000.0/kSampleRate);
       const AudioFrame f=pipelineProcess(P,PC,pcm,mag,t_ms);
       autoUpdate(A,AC,f,t_ms); lock=f.bpm_conf; key=f.key_conf; ps=(int)f.preset; tend=t_ms;
+      if(!f.gated){ ++vn; vsum+=f.vocal; fsum+=formantShare(PC.vocal,f.bands_h);
+        csum+=(f.f0_voiced?f.f0_conf:0.0f); hsum+=1.0f-f.percussive;
+        asum+=P.vocal.raw;
+        if(f.vocal>0.55f) ++psum; if(f.f0_voiced) ++vhi; }
       consumed+=(size_t)(presetHopMs(P.style.current)*kSampleRate/1000.0f);
     }
     const float pa=(A.e_h+A.e_p>1e-12f)?A.e_p/(A.e_h+A.e_p):0.0f;
@@ -101,5 +112,19 @@ int main(int argc,char**argv){
            NM[w], pa, splitContrastOf(A.e_ends,A.e_mid), A.f0_duty, A.f0_jitter, lock, key,
            ps, tend/1000.0f, FX[A.current],
            A.score[0],A.score[1],A.score[2],A.score[3],A.score[4]);
+    VS[w]=vsum/(double)vn; VF[w]=fsum/(double)vn; VC[w]=csum/(double)vn;
+    VH[w]=hsum/(double)vn; VP[w]=psum/(double)vn; VD[w]=(double)vhi/(double)vn;
+    VA[w]=asum/(double)vn;
   }
+
+  // ── 人声存在度的标定表 ────────────────────────────────────
+  //
+  // 「摇滚·器乐」与「摇滚·人声」是同一段伴奏加不加人声线，天然的正反例对。
+  // 门槛要落在这两列之间的**空隙**里，不能落在任一簇内部（第 26 条）。
+  // 三个因子分开打印，才知道是哪一项在拖后腿（第 33 条：量代码实际用的量）。
+  printf("\n%-14s %7s %8s %8s | %7s %8s | %7s\n",
+         "人声标定","f0conf","共振峰","1-打击","raw","vocal","过0.55占");
+  for(int w=0;w<7;++w)
+    printf("%-14s %7.2f %8.2f %8.2f | %7.2f %8.2f | %7.2f\n",
+           NM[w], VC[w], VF[w], VH[w], VA[w], VS[w], VP[w]);
   return 0; }

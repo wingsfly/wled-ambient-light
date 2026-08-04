@@ -21,6 +21,7 @@
 #include "lamp_mood.h"
 #include "lamp_bar.h"
 #include "lamp_hpss.h"
+#include "lamp_vocal.h"
 
 namespace lamp {
 
@@ -80,6 +81,12 @@ struct AudioFrame {
     float bands_h[NUM_BANDS] = {0};
     float bands_p[NUM_BANDS] = {0};
     float percussive = 0.0f;        // 打击能量占比 [0,1]
+
+    // ── 人声 ──
+    // ⚠️ 名字叫人声，测的其实是「处在人声音域、谐波型、能量集中在共振峰带
+    // 的主旋律」—— 萨克斯独奏也会高分。口径与局限见 lamp_vocal.h 的头注释。
+    float vocal       = 0.0f;       // [0,1]
+    bool  vocal_onset = false;      // 只在刚进入人声段那一帧为真
     //
     // 自动选灯效**不在这里**。它要吃 FxId，而 lamp_fx.h 反过来又依赖本文件 ——
     // 放进来就成了循环依赖。更根本的理由是分层：管线产出特征，
@@ -100,6 +107,7 @@ struct PipelineConfig {
     MoodConfig     mood;
     BarConfig      bar;
     HpssConfig     hpss;
+    VocalConfig    vocal;
     float          latency_comp_ms = 0.0f;   // 相位提前量，抵消流水线延迟（§3.5）
 };
 
@@ -120,6 +128,7 @@ struct Pipeline {
     MoodState     mood;
     BarState      bar;
     HpssState     hpss;
+    VocalState    vocal;
     float         dt_ms = 0.0f;
 };
 
@@ -244,6 +253,13 @@ inline AudioFrame pipelineProcess(Pipeline &p, const PipelineConfig &c,
     //    怎么延展，与整体增益无关。
     hpssProcess(p.hpss, c.hpss, f.bands, f.bands_h, f.bands_p);
     f.percussive = percussiveRatio(f.bands_h, f.bands_p);
+
+    // 6b. 人声存在度。**必须排在 HPSS 与基频之后** —— 它吃的是谐波路的频段
+    //     与已经定好的 f0，自己不做任何变换。
+    vocalUpdate(p.vocal, c.vocal, f.f0_hz, f.f0_conf, f.f0_voiced,
+                f.bands_h, f.percussive, p.dt_ms);
+    f.vocal       = p.vocal.vocal;
+    f.vocal_onset = p.vocal.onset;
 
     // 7. 小节。重音取**打击路**的低频段 —— 底鼓落在第一拍是这套判据的全部依据，
     //    用混着人声和贝斯的原始低频会把判据糊掉。
