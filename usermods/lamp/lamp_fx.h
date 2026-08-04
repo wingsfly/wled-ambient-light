@@ -33,7 +33,44 @@ enum FxId : uint8_t {
     FX_CHROMA_RING   = 7,
     FX_COLOR_FLOW    = 8,
     FX_MELODY_LINE   = 9,
-    FX_COUNT         = 10,
+    // ── 节拍 ──
+    FX_DOWNBEAT_BLOOM = 10,
+    FX_BAR_LADDER     = 11,
+    FX_KICK_SNARE     = 12,
+    // ── 旋律 ──
+    FX_PITCH_COMET    = 13,
+    FX_HARMONY_SHIFT  = 14,
+    // ── 人声 / 主旋律 ──
+    FX_VOCAL_HALO     = 15,
+    FX_VOCAL_BREATH   = 16,
+    FX_FORMANT_RIBBON = 17,
+    FX_DUET_SPLIT     = 18,
+    FX_LYRIC_PULSE    = 19,
+    // ── 氛围 ──
+    FX_SECTION_TIDE   = 20,
+    FX_MOOD_GRADIENT  = 21,
+    FX_SLOW_AURORA    = 22,
+    FX_COUNT          = 23,
+};
+
+// 效果吃哪些音乐特征。**按它真正读了 AudioFrame 的哪几个字段标**，
+// 不按「听起来像什么」标 —— 界面上的筛选是拿这个当依据的，标虚了就是骗人。
+enum FxTag : uint8_t {
+    TAG_BEAT     = 1 << 0,   // 拍点 / 小节 / 起音
+    TAG_MELODY   = 1 << 1,   // 基频 / 色度 / 调性 / 和声
+    TAG_VOCAL    = 1 << 2,   // 人声（主旋律）存在度
+    TAG_MOOD     = 1 << 3,   // 氛围 / 段落 / 能量走向
+    TAG_SPECTRUM = 1 << 4,   // 频段能量 / 谐波打击分离
+};
+
+// 适合的音乐风格。**这是策展推荐，不是自动识别** —— 这套管线不做流派分类，
+// 这张表是人按「这个流派突出什么特征、这个效果表达什么」填的。
+enum FxGenre : uint8_t {
+    GEN_CLASSICAL = 1 << 0,
+    GEN_POP       = 1 << 1,
+    GEN_ROCK      = 1 << 2,
+    GEN_RAP       = 1 << 3,
+    GEN_EDM       = 1 << 4,
 };
 
 inline const char *fxName(FxId f) {
@@ -47,8 +84,115 @@ inline const char *fxName(FxId f) {
         case FX_CHROMA_RING: return "chroma-ring";
         case FX_COLOR_FLOW:  return "color-flow";
         case FX_MELODY_LINE: return "melody-line";
+        case FX_DOWNBEAT_BLOOM: return "downbeat-bloom";
+        case FX_BAR_LADDER:     return "bar-ladder";
+        case FX_KICK_SNARE:     return "kick-snare";
+        case FX_PITCH_COMET:    return "pitch-comet";
+        case FX_HARMONY_SHIFT:  return "harmony-shift";
+        case FX_VOCAL_HALO:     return "vocal-halo";
+        case FX_VOCAL_BREATH:   return "vocal-breath";
+        case FX_FORMANT_RIBBON: return "formant-ribbon";
+        case FX_DUET_SPLIT:     return "duet-split";
+        case FX_LYRIC_PULSE:    return "lyric-pulse";
+        case FX_SECTION_TIDE:   return "section-tide";
+        case FX_MOOD_GRADIENT:  return "mood-gradient";
+        case FX_SLOW_AURORA:    return "slow-aurora";
         case FX_SPECTRUM_BARS:
         default:             return "spectrum-bars";
+    }
+}
+
+// 中文名，界面直接用。放在这里而不是页面里 —— 效果表只有一份真相。
+inline const char *fxNameCn(FxId f) {
+    switch (f) {
+        case FX_BEAT_PULSE:     return "拍点脉冲";
+        case FX_LEVEL_SWEEP:    return "电平扫描";
+        case FX_BAR_IMPACT:     return "冲击柱";
+        case FX_BEAT_RUNNER:    return "拍点光点";
+        case FX_SPLIT_BANDS:    return "高低分离";
+        case FX_KEY_WASH:       return "调性染色";
+        case FX_CHROMA_RING:    return "音级环";
+        case FX_COLOR_FLOW:     return "彩色流动";
+        case FX_MELODY_LINE:    return "旋律线";
+        case FX_DOWNBEAT_BLOOM: return "强拍绽放";
+        case FX_BAR_LADDER:     return "小节阶梯";
+        case FX_KICK_SNARE:     return "鼓组分离";
+        case FX_PITCH_COMET:    return "音高彗星";
+        case FX_HARMONY_SHIFT:  return "和声推移";
+        case FX_VOCAL_HALO:     return "人声光晕";
+        case FX_VOCAL_BREATH:   return "气息呼吸";
+        case FX_FORMANT_RIBBON: return "共振峰带";
+        case FX_DUET_SPLIT:     return "人声伴奏分管";
+        case FX_LYRIC_PULSE:    return "唱句脉冲";
+        case FX_SECTION_TIDE:   return "段落潮汐";
+        case FX_MOOD_GRADIENT:  return "情绪渐变";
+        case FX_SLOW_AURORA:    return "极光";
+        case FX_SPECTRUM_BARS:
+        default:                return "频段柱";
+    }
+}
+
+inline uint8_t fxTags(FxId f) {
+    switch (f) {
+        case FX_SPECTRUM_BARS:  return TAG_SPECTRUM;
+        case FX_BEAT_PULSE:     return TAG_BEAT;
+        case FX_LEVEL_SWEEP:    return TAG_MOOD;
+        case FX_BAR_IMPACT:     return TAG_BEAT;
+        case FX_BEAT_RUNNER:    return TAG_BEAT;
+        case FX_SPLIT_BANDS:    return TAG_SPECTRUM;
+        case FX_KEY_WASH:       return TAG_MELODY;
+        case FX_CHROMA_RING:    return TAG_MELODY;
+        case FX_COLOR_FLOW:     return TAG_MOOD | TAG_MELODY;   // 色相由调性定，速度由 BPM
+        case FX_MELODY_LINE:    return TAG_MELODY;
+        case FX_DOWNBEAT_BLOOM: return TAG_BEAT;
+        case FX_BAR_LADDER:     return TAG_BEAT;
+        case FX_KICK_SNARE:     return TAG_BEAT | TAG_SPECTRUM;
+        case FX_PITCH_COMET:    return TAG_MELODY;
+        case FX_HARMONY_SHIFT:  return TAG_MELODY;
+        case FX_VOCAL_HALO:     return TAG_VOCAL | TAG_MELODY;
+        case FX_VOCAL_BREATH:   return TAG_VOCAL;
+        case FX_FORMANT_RIBBON: return TAG_VOCAL | TAG_SPECTRUM;
+        case FX_DUET_SPLIT:     return TAG_VOCAL | TAG_SPECTRUM;
+        case FX_LYRIC_PULSE:    return TAG_VOCAL | TAG_BEAT;
+        case FX_SECTION_TIDE:   return TAG_MOOD;
+        case FX_MOOD_GRADIENT:  return TAG_MOOD;
+        case FX_SLOW_AURORA:    return TAG_MOOD;
+        default:                return 0;
+    }
+}
+
+// 推荐给哪些风格。依据是「这个流派突出什么音乐特征」：
+//   古典 —— 力度与旋律线，几乎没有稳定鼓点 → 调性/旋律/氛围类
+//   流行 —— 人声为主，四拍规整         → 人声/彩色流动/拍点类
+//   摇滚 —— 鼓组重、失真吉他压掉调性     → 冲击/鼓组/频段类
+//   Rap  —— 808 与 hi-hat 的对话，旋律少 → 鼓组/高低分离/小节类
+//   电子 —— 强四拍与段落构建           → 冲击/光点/段落类
+inline uint8_t fxGenres(FxId f) {
+    switch (f) {
+        case FX_SPECTRUM_BARS:  return GEN_EDM | GEN_RAP;
+        case FX_BEAT_PULSE:     return GEN_ROCK | GEN_RAP | GEN_EDM;
+        case FX_LEVEL_SWEEP:    return GEN_CLASSICAL | GEN_POP;
+        case FX_BAR_IMPACT:     return GEN_ROCK | GEN_EDM | GEN_RAP;
+        case FX_BEAT_RUNNER:    return GEN_POP | GEN_EDM;
+        case FX_SPLIT_BANDS:    return GEN_ROCK | GEN_RAP;
+        case FX_KEY_WASH:       return GEN_CLASSICAL | GEN_POP;
+        case FX_CHROMA_RING:    return GEN_CLASSICAL | GEN_POP;
+        case FX_COLOR_FLOW:     return GEN_POP | GEN_EDM;
+        case FX_MELODY_LINE:    return GEN_CLASSICAL | GEN_POP;
+        case FX_DOWNBEAT_BLOOM: return GEN_ROCK | GEN_EDM;
+        case FX_BAR_LADDER:     return GEN_RAP | GEN_EDM;
+        case FX_KICK_SNARE:     return GEN_ROCK | GEN_RAP;
+        case FX_PITCH_COMET:    return GEN_CLASSICAL | GEN_POP;
+        case FX_HARMONY_SHIFT:  return GEN_CLASSICAL | GEN_POP;
+        case FX_VOCAL_HALO:     return GEN_POP;
+        case FX_VOCAL_BREATH:   return GEN_POP | GEN_CLASSICAL;
+        case FX_FORMANT_RIBBON: return GEN_POP;
+        case FX_DUET_SPLIT:     return GEN_POP | GEN_ROCK;
+        case FX_LYRIC_PULSE:    return GEN_POP | GEN_RAP;
+        case FX_SECTION_TIDE:   return GEN_EDM | GEN_CLASSICAL;
+        case FX_MOOD_GRADIENT:  return GEN_CLASSICAL;
+        case FX_SLOW_AURORA:    return GEN_CLASSICAL;
+        default:                return 0;
     }
 }
 
@@ -70,6 +214,25 @@ struct FxState {
     float f0_u = 0.5f;            // 旋律线在管上的位置，平滑后
     bool  has_f0 = false;
     float trail[LEDS_PER_TUBE] = {0};   // 旋律线的拖影
+
+    // ── 新增效果的状态 ──
+    // 各效果用各自的变量，不共用 —— fxAdvance 每帧对所有效果推进状态，
+    // 共用会让「换个效果画面不一样」变成「换个效果把另一个的状态搅了」。
+    float bloom  = 0.0f;          // 强拍绽放的包络
+    float ripple = 0.0f;          // 弱拍的小涟漪
+    int   last_bar = -1;          // 小节阶梯：换小节时换色
+    float ladder_hue = 0.0f;
+    float kick = 0.0f, snare = 0.0f;      // 鼓组分离的两条包络
+    float comet_u = 0.5f;                 // 音高彗星的位置
+    bool  has_comet = false;
+    float comet_trail[LEDS_PER_TUBE] = {0};
+    float harm_hue = 0.0f, harm_wave = 0.0f;   // 和声推移
+    float voc = 0.0f;             // 人声存在度的再平滑（画面别跟着抖）
+    float voc_u = 0.5f;           // 人声光晕的位置（跟 f0 高低）
+    float lyric = 0.0f;           // 唱句脉冲的包络
+    float tide = 0.0f;            // 段落潮汐的扫过进度，1→0
+    float tide_hue = 0.0f;
+    float aur[3] = {0.11f, 0.47f, 0.79f};      // 极光三条相位，互质起点免得同步
 };
 
 struct FxConfig {
@@ -86,6 +249,17 @@ struct FxConfig {
     float sect_tau_ms   = 1200.0f;  // 换段余波的衰减
     float trail_tau_ms  = 500.0f;   // 旋律线拖影的衰减
     float f0_glide_ms   = 70.0f;    // 旋律线位置的平滑
+
+    // ── 新增效果 ──
+    float bloom_beats   = 1.6f;     // 强拍绽放的衰减长度（拍）——比冲击柱长，才有「绽放」感
+    float ripple_beats  = 0.4f;     // 弱拍涟漪，短促
+    float drum_tau_ms   = 90.0f;    // 鼓组包络：快到能分出底鼓与军鼓
+    float comet_tail_ms = 900.0f;   // 彗星拖尾，比旋律线长得多
+    float harm_tau_ms   = 2500.0f;  // 和声色相推移，一个乐句的尺度
+    float voc_tau_ms    = 300.0f;   // 人声画面的再平滑
+    float lyric_tau_ms  = 450.0f;   // 唱句脉冲的衰减
+    float tide_ms       = 3500.0f;  // 段落潮汐扫过整管要多久
+    float aurora_ms     = 26000.0f; // 极光一圈。慢到「看不出在动」才对
 };
 
 // HSV→RGB，色相 [0,1)。特效常用色相环，写一次省得三处重复。
@@ -248,7 +422,10 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
 
     // 换段的余波。section_change 只有一帧为真，直接画的话眨眼就没了。
     const float as = envCoeff(c.sect_tau_ms, dt_ms);
-    if (f.section_change) st.sect = 1.0f;
+    // **换段泛白要带电平门。** 没有它的话，音乐停下那一刻若正好判出换段，
+    // 灯会在静音里泛一层白 —— 而「静音必须熄灭」是硬不变量。
+    // 这是把夹具补成「头一帧带事件标志」之后才暴露的，之前一直藏着。
+    if (f.section_change && f.rms_fast > 0.003f) st.sect = 1.0f;
     else                  st.sect += as * (0.0f - st.sect);
 
     // ── 旋律线 ──
@@ -310,6 +487,110 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
         if (hm > 1.0f) hm = 1.0f;
         if (hm > st.flash) st.flash = hm;
         else               st.flash += a * (hm - st.flash);
+    }
+
+    // ── 以下是后加的十三个效果的状态 ──────────────────────
+    // 上面已经算过 beat_ms，但那份在没锁上时是 0（彩色流动另有退路）；
+    // 这里要一个永远可用的拍长。
+    const float beat_any = (f.beat_locked && f.bpm > 1.0f) ? (60000.0f / f.bpm) : 500.0f;
+    auto clamp01 = [](float v) {
+        if (!isfinite(v) || v < 0.0f) return 0.0f;
+        return v > 1.0f ? 1.0f : v;
+    };
+    const float lvl = clamp01(f.rms_fast * kFxLevelScale);
+
+    // 强拍绽放 / 弱拍涟漪。**强拍的包络比弱拍长四倍**，画面上才有主次；
+    // 都用同一条包络的话，小节结构就丢了 —— 那正是冲击柱已经在做的事。
+    {
+        const float ab = envCoeff(beat_any * c.bloom_beats, dt_ms);
+        const float ar = envCoeff(beat_any * c.ripple_beats, dt_ms);
+        if (f.downbeat && lvl > 0.0f) st.bloom = lvl;
+        else st.bloom += ab * (0.0f - st.bloom);
+        if (f.onset && !f.downbeat && lvl > 0.0f) { if (lvl > st.ripple) st.ripple = lvl; }
+        else st.ripple += ar * (0.0f - st.ripple);
+    }
+
+    // 小节阶梯：换小节就换一次色。用 bar_index 的变化沿，不是 bar_pos==0 ——
+    // 后者在没锁上小节时会乱跳。
+    if (f.bar_index != st.last_bar) {
+        st.last_bar = f.bar_index;
+        st.ladder_hue += 0.137f;                  // 黄金比附近，连着几小节不会撞色
+        st.ladder_hue -= floorf(st.ladder_hue);
+    }
+
+    // 鼓组：打击路的低四段是底鼓，高六段是军鼓/镲。
+    // 用 bands_p 而不是 bands —— 混合谱里贝斯与人声会盖过鼓。
+    {
+        const float ad = envCoeff(c.drum_tau_ms, dt_ms);
+        float k = 0.0f, sn = 0.0f;
+        for (int i = 0; i < 4; ++i) k += f.bands_p[i];
+        for (int i = NUM_BANDS - 6; i < NUM_BANDS; ++i) sn += f.bands_p[i];
+        k = clamp01(k * kFxBandScale / 4.0f);
+        sn = clamp01(sn * kFxBandScale / 6.0f);
+        if (k > st.kick)   st.kick = k;   else st.kick  += ad * (k - st.kick);
+        if (sn > st.snare) st.snare = sn; else st.snare += ad * (sn - st.snare);
+    }
+
+    // 音高彗星：位置跟 f0，拖尾比旋律线长得多，所以滑音能看出轨迹。
+    {
+        const float at = envCoeff(c.comet_tail_ms, dt_ms);
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i)
+            st.comet_trail[i] += at * (0.0f - st.comet_trail[i]);
+        if (f.f0_voiced && f.f0_hz > 20.0f) {
+            // 与旋律线同一套映射：log2 音高线性铺在管上，两个八度
+            const float u = clamp01((log2f(f.f0_hz / 110.0f)) / 3.0f);
+            if (!st.has_comet) { st.comet_u = u; st.has_comet = true; }
+            st.comet_u += envCoeff(c.f0_glide_ms, dt_ms) * (u - st.comet_u);
+            const int n = (int)(st.comet_u * (LEDS_PER_TUBE - 1) + 0.5f);
+            if (n >= 0 && n < LEDS_PER_TUBE) st.comet_trail[n] = 1.0f;
+        }
+    }
+
+    // 和声推移：色相在一个乐句的尺度上跟着和声走，换和弦时泛一层波。
+    {
+        const float ahm = envCoeff(c.harm_tau_ms, dt_ms);
+        const float target = (f.key_root >= 0) ? ((float)f.key_root / 12.0f) : st.harm_hue;
+        float d = target - st.harm_hue;
+        if (d > 0.5f) d -= 1.0f; else if (d < -0.5f) d += 1.0f;
+        st.harm_hue += ahm * d;
+        st.harm_hue -= floorf(st.harm_hue);
+        const float hm = clamp01(f.harmony_move * 5.0f);
+        if (hm > st.harm_wave) st.harm_wave = hm;
+        else st.harm_wave += envCoeff(1200.0f, dt_ms) * (0.0f - st.harm_wave);
+    }
+
+    // 人声：再平滑一层。lamp_vocal 已经做过时间常数，但那是**判据**用的；
+    // 画面还要更稳一点，否则一句里的换气会让光晕一抖一抖。
+    {
+        st.voc += envCoeff(c.voc_tau_ms, dt_ms) * (clamp01(f.vocal) - st.voc);
+        if (f.f0_voiced && f.f0_hz > 20.0f) {
+            const float u = clamp01(log2f(f.f0_hz / 110.0f) / 3.0f);
+            st.voc_u += envCoeff(240.0f, dt_ms) * (u - st.voc_u);
+        }
+        // 与强拍绽放同一条规矩：没有声音就不起包络。
+        // 真实管线里静音时 vocal_onset 不可能为真，但夹具会喂这种组合，
+        // 而「静音要熄灭」是硬不变量 —— 在这里挡住比在渲染里挡干净。
+        if (f.vocal_onset && lvl > 0.0f) st.lyric = 1.0f;
+        else st.lyric += envCoeff(c.lyric_tau_ms, dt_ms) * (0.0f - st.lyric);
+    }
+
+    // 段落潮汐：换段时起一次扫过，扫完停住。
+    if (f.section_change) { st.tide = 1.0f; st.tide_hue += 0.31f; st.tide_hue -= floorf(st.tide_hue); }
+    else if (st.tide > 0.0f) {
+        st.tide -= dt_ms / c.tide_ms;
+        if (st.tide < 0.0f) st.tide = 0.0f;
+    }
+
+    // 极光：三条极慢的相位。速度只被 energy_trend 轻微推动 ——
+    // 这是唯一一个**不追随瞬时声音**的效果，它画的是几十秒的走向。
+    {
+        const float sp = 1.0f + 0.6f * (isfinite(f.energy_trend) ? f.energy_trend : 0.0f);
+        const float step = dt_ms / c.aurora_ms * sp;
+        const float mul[3] = {1.0f, 0.61f, 1.37f};
+        for (int i = 0; i < 3; ++i) {
+            st.aur[i] += step * mul[i];
+            st.aur[i] -= floorf(st.aur[i]);
+        }
     }
 
     // 光点：锁上节拍时直接跟相位走，一拍跑完一趟；没锁上就匀速漂
@@ -498,6 +779,277 @@ inline void fxMelodyLine(const FxState &st, const AudioFrame &f,
         }
 }
 
+// ══ 节拍类 ════════════════════════════════════════════════
+
+// 强拍绽放：强拍从管中央向两端铺开，弱拍只在中央点一下。
+// 与冲击柱的分别：那个每拍都一样重，这个**只有强拍是大的** —— 画的是小节，不是拍。
+inline void fxDownbeatBloom(const FxState &st, const AudioFrame &f,
+                            const Geometry &g, Rgb *out) {
+    const float b = perceptual(st.bloom), r = perceptual(st.ripple);
+    if (b <= 0.0f && r <= 0.0f) return;
+    const float reach = 0.15f + 0.85f * st.bloom;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const float d = fabsf(u - 0.5f) * 2.0f;
+            float v = 0.0f, hue = st.hue;
+            if (d <= reach) v = b * (1.0f - (d / (reach + 1e-6f)) * 0.6f);
+            if (d <= 0.18f) {                       // 弱拍只有中央这一小段
+                const float rv = r * (1.0f - d / 0.18f) * 0.55f;
+                if (rv > v) { v = rv; hue = st.hue + 0.5f; }
+            }
+            out[mapPixel(g, (Side)s, u)] = hsv(hue, 0.85f, v);
+        }
+    (void)f;
+}
+
+// 小节阶梯：管子切成 beats_per_bar 段，走到第几拍就点亮到第几段，
+// 每过一小节整体换色。**看得见拍号** —— 3/4 与 4/4 一眼能分开。
+inline void fxBarLadder(const FxState &st, const AudioFrame &f,
+                        const Geometry &g, Rgb *out) {
+    int n = f.beats_per_bar;
+    if (n < 2) n = 4;
+    if (n > 8) n = 8;
+    const int pos = (f.bar_pos >= 0 && f.bar_pos < n) ? f.bar_pos : 0;
+    const float lvl = perceptual(f.rms_fast * kFxLevelScale);
+    if (lvl <= 0.0f) return;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const int seg = (int)(u * n);
+            Rgb c{0, 0, 0};
+            if (seg <= pos) {
+                // 已经走过的段留一层暗底，当前段全亮 —— 这样能看出走到哪
+                const float v = (seg == pos) ? lvl : lvl * 0.22f;
+                c = hsv(st.ladder_hue + 0.06f * seg, 0.8f, v);
+            }
+            out[mapPixel(g, (Side)s, u)] = c;
+        }
+}
+
+// 鼓组分离：底鼓从底往上顶，军鼓/镲从顶往下压。
+// 吃的是**打击路**，所以贝斯和人声不会混进来 —— 这是它与高低分离的分别。
+inline void fxKickSnare(const FxState &st, const AudioFrame &f,
+                        const Geometry &g, Rgb *out) {
+    const float k = perceptual(st.kick), sn = perceptual(st.snare);
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            Rgb c{0, 0, 0};
+            if (u < st.kick * 0.55f)             c = hsv(0.99f, 0.95f, k);        // 底鼓：深红
+            else if (u > 1.0f - st.snare * 0.55f) c = hsv(0.13f, 0.55f, sn);       // 军鼓/镲：米黄
+            out[mapPixel(g, (Side)s, u)] = c;
+        }
+    (void)f;
+}
+
+// ══ 旋律类 ════════════════════════════════════════════════
+
+// 音高彗星：一颗亮点跟着基频跑，身后拖一条长尾。
+// 与旋律线的分别：那个拖影短、看的是当前音高；这个尾巴长得多，
+// 看的是**旋律的轨迹** —— 一段滑音会画出一条连续的线。
+inline void fxPitchComet(const FxState &st, const AudioFrame &f,
+                         const Geometry &g, Rgb *out) {
+    // **彗头要有一圈辉光，不能只点一颗灯珠。** 音高不动的时候拖尾也不动，
+    // 单像素在磨砂外壳上就是一个点，看不出是彗星 —— 初稿这么写，
+    // 「每个效果都要画得出东西」那条不变量当场报全黑（96 颗里只亮 2 颗）。
+    const float head_w = 3.5f / (float)(LEDS_PER_TUBE - 1);   // 半宽约 3 颗
+    const bool  lit = f.f0_voiced && f.f0_hz > 20.0f;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            float t = st.comet_trail[i];
+            if (lit) {                                        // 叠上彗头
+                const float d = fabsf(u - st.comet_u) / head_w;
+                const float head = (d < 1.0f) ? (1.0f - d * d) : 0.0f;
+                if (head > t) t = head;
+            }
+            if (t <= 0.001f) { out[mapPixel(g, (Side)s, u)] = Rgb{0, 0, 0}; continue; }
+            // 尾巴越旧越偏冷：颜色本身就编码了「多久以前经过这里」
+            const float hue = st.key_hue + 0.18f * (1.0f - t);
+            out[mapPixel(g, (Side)s, u)] = hsv(hue, 0.75f + 0.25f * t, perceptual(t));
+        }
+}
+
+// 和声推移：整管一条随和声缓慢移动的渐变，换和弦时从两端涌进一层波。
+// 时间尺度是**乐句**，不是拍 —— 这是它和调性染色的分别（那个只在换调时动）。
+inline void fxHarmonyShift(const FxState &st, const AudioFrame &f,
+                           const Geometry &g, Rgb *out) {
+    const float lvl = perceptual(f.rms_fast * kFxLevelScale);
+    if (lvl <= 0.0f) return;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const float wave = st.harm_wave * (1.0f - fabsf(u - 0.5f) * 2.0f);
+            out[mapPixel(g, (Side)s, u)] =
+                hsv(st.harm_hue + 0.12f * u, 0.7f, lvl * (0.55f + 0.45f * wave));
+        }
+}
+
+// ══ 人声 / 主旋律类 ═══════════════════════════════════════
+
+// 人声光晕：人声在时，管上按基频高低的位置浮起一团柔光。
+// 人声越强，光晕越宽越亮；器乐段落里整管暗下去。
+inline void fxVocalHalo(const FxState &st, const AudioFrame &f,
+                        const Geometry &g, Rgb *out) {
+    if (st.voc <= 0.01f) return;
+    const float w = 0.10f + 0.28f * st.voc;          // 光晕半宽
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            const float d = fabsf(u - st.voc_u) / w;
+            const float v = (d < 1.0f) ? (1.0f - d * d) : 0.0f;   // 抛物线，边缘柔
+            out[mapPixel(g, (Side)s, u)] = hsv(st.key_hue + 0.08f, 0.45f, perceptual(v * st.voc));
+        }
+    (void)f;
+}
+
+// 气息呼吸：整管随人声存在度呼吸。**没有位置信息，只有明暗** ——
+// 想要的就是「有人在唱的时候房间亮一点」这种最不打扰的反应。
+inline void fxVocalBreath(const FxState &st, const AudioFrame &f,
+                          const Geometry &g, Rgb *out) {
+    // 底光是为了「器乐段落里别看着像灯灭了」，但**真静音里亮着才像灯坏了**。
+    // 与 fxBeatRunner 同一条规矩。
+    if (f.gated || !(f.rms_fast > 0.003f)) return;
+    const float base = 0.06f;                        // 器乐段落留一点底光，不然像灯坏了
+    const float v = base + (1.0f - base) * perceptual(st.voc);
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            // 两端略暗，看起来像一根发光的柱子而不是一条灯带
+            const float shade = 1.0f - 0.25f * fabsf(u - 0.5f) * 2.0f;
+            out[mapPixel(g, (Side)s, u)] = hsv(st.key_hue + 0.05f, 0.35f, v * shade);
+        }
+    (void)f;
+}
+
+// 共振峰带：只画 300–3000Hz 那几段的**谐波**能量，铺满整管。
+// 人声可懂度就在这一带，所以唱起来的时候这条带子会明显活起来，
+// 而底鼓与镲片几乎不动它。
+inline void fxFormantRibbon(const FxState &st, const AudioFrame &f,
+                            const Geometry &g, Rgb *out) {
+    // 落在 [300,3000] 内的段：按 lamp_bands 的边界算，不写死段号
+    int lo = -1, hi = -1;
+    for (int i = 0; i < NUM_BANDS; ++i) {
+        const float cf = bandCenterHz(i);
+        if (cf >= 300.0f && cf <= 3000.0f) { if (lo < 0) lo = i; hi = i; }
+    }
+    if (lo < 0) return;
+    const int n = hi - lo + 1;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            int b = lo + (int)(u * n);
+            if (b > hi) b = hi;
+            float e = f.bands_h[b] * kFxBandScale;
+            if (!isfinite(e) || e < 0.0f) e = 0.0f;
+            out[mapPixel(g, (Side)s, u)] =
+                hsv(0.08f + 0.34f * (float)(b - lo) / (float)n, 0.8f, perceptual(e));
+        }
+    (void)st;
+}
+
+// 人声伴奏分管：左管画谐波路（人声与旋律乐器），右管画打击路（鼓组）。
+// **两根管各说一件事** —— 这是这台灯有两根管才做得到的效果。
+inline void fxDuetSplit(const FxState &st, const AudioFrame &f,
+                        const Geometry &g, Rgb *out) {
+    for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+        const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+        const int b = (int)(u * NUM_BANDS) < NUM_BANDS ? (int)(u * NUM_BANDS) : NUM_BANDS - 1;
+        float eh = f.bands_h[b] * kFxBandScale, ep = f.bands_p[b] * kFxBandScale;
+        if (!isfinite(eh) || eh < 0.0f) eh = 0.0f;
+        if (!isfinite(ep) || ep < 0.0f) ep = 0.0f;
+        // 人声那根随人声存在度提亮，让「谁在唱」看得出来
+        out[mapPixel(g, SIDE_L, u)] =
+            hsv(st.key_hue + 0.06f, 0.55f, perceptual(eh) * (0.55f + 0.45f * st.voc));
+        out[mapPixel(g, SIDE_R, u)] = hsv(0.03f, 0.9f, perceptual(ep));
+    }
+}
+
+// 唱句脉冲：每进来一句人声，整管闪一下再退。**句与句之间是暗的** ——
+// 它画的是乐句的起点，不是人声的持续。
+inline void fxLyricPulse(const FxState &st, const AudioFrame &f,
+                         const Geometry &g, Rgb *out) {
+    const float v = perceptual(st.lyric);
+    if (v <= 0.0f) return;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            // 从人声所在位置向两端散开
+            const float d = fabsf(u - st.voc_u);
+            const float spread = 0.25f + 0.75f * st.lyric;
+            const float k = (d < spread) ? (1.0f - d / spread) : 0.0f;
+            out[mapPixel(g, (Side)s, u)] = hsv(st.key_hue + 0.42f, 0.6f, v * k);
+        }
+    (void)f;
+}
+
+// ══ 氛围类 ════════════════════════════════════════════════
+
+// 段落潮汐：换段时一道色从一端扫到另一端，扫完停在新色上。
+// 段内几乎不动 —— 它标记的是**结构**，不是声音。
+inline void fxSectionTide(const FxState &st, const AudioFrame &f,
+                          const Geometry &g, Rgb *out) {
+    if (f.gated || !(f.rms_fast > 0.003f)) return;   // 理由同 fxVocalBreath
+    const float lvl = 0.12f + 0.88f * perceptual(f.rms_fast * kFxLevelScale);
+    const float front = 1.0f - st.tide;              // 潮头位置 0→1
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            // 潮头之后是新色，之前是旧色；潮头本身亮一圈
+            const float hue = (u <= front) ? st.tide_hue : st.tide_hue - 0.31f;
+            const float edge = 1.0f - fabsf(u - front) * 6.0f;
+            const float boost = (st.tide > 0.0f && edge > 0.0f) ? edge : 0.0f;
+            out[mapPixel(g, (Side)s, u)] = hsv(hue, 0.65f, lvl * (0.7f + 0.3f * boost) + 0.3f * boost);
+        }
+}
+
+// 情绪渐变：整管一条冷↔暖的渐变，位置由 mood 决定、亮度由 dynamics 决定。
+// **几乎不动。** 这是给「放着当氛围灯」用的 —— 音乐一安静它就沉下去，
+// 躁起来才偏暖变亮。
+inline void fxMoodGradient(const FxState &st, const AudioFrame &f,
+                           const Geometry &g, Rgb *out) {
+    if (f.gated || !(f.rms_fast > 0.003f)) return;   // 理由同 fxVocalBreath
+    float m = f.mood;
+    if (!isfinite(m)) m = 0.5f;
+    if (m < 0.0f) m = 0.0f; if (m > 1.0f) m = 1.0f;
+    float d = f.dynamics;
+    if (!isfinite(d) || d < 0.0f) d = 0.0f; if (d > 1.0f) d = 1.0f;
+    const float base = 0.58f - 0.55f * m;            // 静=青蓝(0.58) 躁=红(0.03)
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            out[mapPixel(g, (Side)s, u)] =
+                hsv(base + 0.10f * u, 0.6f + 0.3f * m, 0.10f + 0.75f * d);
+        }
+    (void)st;
+}
+
+// 极光：三条极慢的波在管上叠加，**不追随任何瞬时声音**，
+// 只被几十秒尺度的能量走向轻微推快或推慢。
+// 这是唯一一个「音乐停了也还好看」的效果 —— 桌面灯大部分时间需要的正是这个。
+inline void fxSlowAurora(const FxState &st, const AudioFrame &f,
+                         const Geometry &g, Rgb *out) {
+    if (f.gated || !(f.rms_fast > 0.003f)) return;   // 理由同 fxVocalBreath
+    float m = f.mood;
+    if (!isfinite(m)) m = 0.5f;
+    if (m < 0.0f) m = 0.0f; if (m > 1.0f) m = 1.0f;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
+            const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
+            // 三条不同周期的正弦叠加：不会看出重复的花样
+            float v = 0.0f, hsum = 0.0f;
+            const float k[3] = {1.0f, 2.3f, 3.7f};
+            for (int q = 0; q < 3; ++q) {
+                const float w = 0.5f + 0.5f * sinf(6.2831853f * (st.aur[q] + k[q] * u));
+                v += w; hsum += w * (float)q / 3.0f;
+            }
+            v /= 3.0f;
+            const float hue = 0.45f - 0.25f * m + 0.30f * (hsum / (v * 3.0f + 1e-6f));
+            out[mapPixel(g, (Side)s, u)] = hsv(hue, 0.55f + 0.2f * m, 0.10f + 0.55f * v * v);
+        }
+}
+
 // 统一入口。渲染后**统一施加白平衡** —— 各效果自己不碰它，
 // 否则总有一个会忘，而忘了的那个偏色，看起来像效果设计得难看。
 inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
@@ -514,6 +1066,19 @@ inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &
         case FX_CHROMA_RING: fxChromaRing(st, f, g, out);    break;
         case FX_COLOR_FLOW:  fxColorFlow(st, f, g, out);     break;
         case FX_MELODY_LINE: fxMelodyLine(st, f, g, out);    break;
+        case FX_DOWNBEAT_BLOOM: fxDownbeatBloom(st, f, g, out);  break;
+        case FX_BAR_LADDER:     fxBarLadder(st, f, g, out);      break;
+        case FX_KICK_SNARE:     fxKickSnare(st, f, g, out);      break;
+        case FX_PITCH_COMET:    fxPitchComet(st, f, g, out);     break;
+        case FX_HARMONY_SHIFT:  fxHarmonyShift(st, f, g, out);   break;
+        case FX_VOCAL_HALO:     fxVocalHalo(st, f, g, out);      break;
+        case FX_VOCAL_BREATH:   fxVocalBreath(st, f, g, out);    break;
+        case FX_FORMANT_RIBBON: fxFormantRibbon(st, f, g, out);  break;
+        case FX_DUET_SPLIT:     fxDuetSplit(st, f, g, out);      break;
+        case FX_LYRIC_PULSE:    fxLyricPulse(st, f, g, out);     break;
+        case FX_SECTION_TIDE:   fxSectionTide(st, f, g, out);    break;
+        case FX_MOOD_GRADIENT:  fxMoodGradient(st, f, g, out);   break;
+        case FX_SLOW_AURORA:    fxSlowAurora(st, f, g, out);     break;
         case FX_SPECTRUM_BARS:
         default:             fxSpectrumBars(f, g, out);      break;
     }
