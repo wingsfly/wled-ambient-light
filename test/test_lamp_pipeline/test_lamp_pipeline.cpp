@@ -1056,6 +1056,36 @@ void test_lyric_pulse_decays_between_phrases(void) {
     TEST_ASSERT_TRUE_MESSAGE(brightness() < peak / 4, "句与句之间必须退下去");
 }
 
+// **人声度低时不能全黑，但真静音必须熄灭。**
+//
+// 这条是用户报「人声光晕、唱句脉冲完全不显示」之后补的。原来写的是
+// voc<=0.01 直接 return / lyric<=0 直接 return —— 在人声度低的素材上
+// 整根管全黑，看起来像灯效坏了，而不是「这段没人声」。
+// 与 fxBeatRunner 的 25% 底光同一条规矩。
+void test_vocal_effects_show_a_standby_glow_but_still_go_dark_on_silence(void) {
+    const FxId ids[2] = {FX_VOCAL_HALO, FX_LYRIC_PULSE};
+    for (int k = 0; k < 2; ++k) {
+        AudioFrame quiet = liveFrame();      // 有声音，但没有人声
+        quiet.vocal = 0.0f; quiet.vocal_onset = false;
+        runFx(ids[k], quiet, quiet, 30);
+        TEST_ASSERT_TRUE_MESSAGE(litCount() > 3,
+            "有声音、没人声时应当留一点待机光，不能全黑");
+
+        AudioFrame sing = liveFrame();
+        sing.vocal = 0.95f;
+        AudioFrame ev = sing; ev.vocal_onset = true;
+        runFx(ids[k], ev, sing, 4);
+        const long loud = brightness();
+        runFx(ids[k], quiet, quiet, 30);
+        TEST_ASSERT_TRUE_MESSAGE(loud > brightness() * 3,
+            "有人声时必须明显比待机亮 —— 否则待机光把效果本身盖掉了");
+
+        AudioFrame sil;                      // 全零：真静音
+        runFx(ids[k], sil, sil, 30);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, litCount(), "真静音必须彻底熄灭");
+    }
+}
+
 // ── 氛围类 ──
 
 void test_section_tide_sweeps_only_on_a_section_change(void) {
@@ -1140,6 +1170,7 @@ int main(int, char **) {
     RUN_TEST(test_formant_ribbon_only_reads_the_vocal_band);
     RUN_TEST(test_duet_split_puts_harmonic_left_and_percussive_right);
     RUN_TEST(test_lyric_pulse_decays_between_phrases);
+    RUN_TEST(test_vocal_effects_show_a_standby_glow_but_still_go_dark_on_silence);
     RUN_TEST(test_section_tide_sweeps_only_on_a_section_change);
     RUN_TEST(test_mood_gradient_hue_follows_the_mood);
     RUN_TEST(test_slow_aurora_ignores_the_instantaneous_level);

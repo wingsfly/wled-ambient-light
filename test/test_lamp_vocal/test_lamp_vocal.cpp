@@ -34,15 +34,18 @@ static float run(float ms, float f0, float conf, bool voiced,
 
 // ── 三个因子各自都是必要条件 ────────────────────────────────
 
-// 三个门相乘会把「都不错」压低 —— 这是刻意的，但要知道压到哪。
-// conf=0.9 / perc=0.1 这组「很好但不完美」的输入实测得 0.73，
-// 理想输入（conf=1 / perc=0）得 0.99。判据是**越过起音阈值 0.55**，
-// 不是某个我拍脑袋定的 0.8（初稿就是这么写的，红了）。
+// 三个门取**几何平均**（不是直接相乘）。这条钉住新标度上的两个参考点。
+//
+// 改标度的原因：直接相乘时真实音乐上三个门各自 0.2–0.5，乘起来只有 0.03，
+// 三个人声灯效全程不亮（用户报的就是这个）。开三次方后「缺一不可」这条
+// 没丢（任一为 0 结果仍是 0），但「三个都还行」不再被压成「完全没有」。
+//
+// conf=0.9 / perc=0.1 这组「很好但不完美」实测 0.90（旧标度是 0.73）。
 void test_a_harmonic_melody_in_the_vocal_range_scores_high(void) {
     reset();
     float h[NUM_BANDS]; spectrumIn(h, 300.0f, 3000.0f, 1.0f);
     const float good = run(2000.0f, 220.0f, 0.9f, true, h, 0.1f);
-    TEST_ASSERT_FLOAT_WITHIN(0.03f, 0.73f, good);
+    TEST_ASSERT_FLOAT_WITHIN(0.03f, 0.90f, good);
     TEST_ASSERT_TRUE_MESSAGE(good > C.onset_on, "很好的输入必须越过起音阈值");
 
     reset();
@@ -155,9 +158,18 @@ void test_formant_threshold_sits_between_a_dense_mix_and_a_voice(void) {
     const float mixed = formantShare(C, h);
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.748f, mixed);
 
-    TEST_ASSERT_TRUE_MESSAGE(dense < C.formant_share_min, "密集混音必须被挡住");
-    TEST_ASSERT_TRUE_MESSAGE(white < C.formant_share_min, "白噪声必须被挡住");
-    TEST_ASSERT_TRUE_MESSAGE(mixed > C.formant_share_min, "压着底噪的人声必须放过");
+    // **断言门的输出，不是 share 与门槛谁大谁小。** 门槛正好定在密集混音
+    // 那条参考线上（0.50），比大小是在比浮点擦边；真正要保证的是
+    // 「密集混音过不去、人声过得去」。
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(0.0f, vocalGate(white, C.formant_share_min),
+        "白噪声必须被挡住");
+    TEST_ASSERT_TRUE_MESSAGE(vocalGate(dense, C.formant_share_min) < 0.02f,
+        "密集混音几乎不该过门");
+    TEST_ASSERT_TRUE_MESSAGE(vocalGate(mixed, C.formant_share_min) > 0.4f,
+        "压着底噪的人声必须明显过门");
+    // 真实音乐实测 0.624 —— 必须落在两者之间，否则这个门在真机上没用。
+    TEST_ASSERT_TRUE_MESSAGE(vocalGate(0.624f, C.formant_share_min) > 0.15f,
+        "真实音乐（实测共振峰占比 0.624）必须能过门，不能像旧门槛 0.62 那样被掐死");
 }
 
 // ── 时间常数按物理时间定 ───────────────────────────────────
@@ -221,7 +233,10 @@ void test_onset_does_not_chatter_at_the_threshold(void) {
 // 上一条测试让 vocal 一直停在 0.55 以上，那里两种实现表现一样 ——
 // 它杀不掉「两个阈值合成一个」的变异体，是变异测试逮出来的。
 //
-// 这条把 vocal 压到带内（f0_conf 0.652 → raw≈0.45）再拉回去：
+// 这条把 vocal 压到带内（f0_conf 0.331 → raw≈0.45）再拉回去：
+// 那个 0.331 是按几何平均反解的 —— cbrt(v×0.994×0.846)=0.45 → v=0.108
+// → conf = 0.25 + 0.108×0.75。换标度时这个数要跟着重算，
+// 所以下面留了一条「夹具有没有真把 vocal 送进带内」的自检。
 // 有滞回 above 全程为真、只报一次；单阈值会掉出去再进来，报两次。
 void test_onset_does_not_refire_inside_the_hysteresis_band(void) {
     reset();
@@ -237,7 +252,7 @@ void test_onset_does_not_refire_inside_the_hysteresis_band(void) {
     };
     phase(2000.0f, 0.90f);      // 进入人声段（raw≈0.73）
     TEST_ASSERT_EQUAL_INT(1, fired);
-    phase(3000.0f, 0.652f);     // 落进带内：低于 on(0.55)，但高于 off(0.35)
+    phase(3000.0f, 0.331f);     // 落进带内：低于 on(0.55)，但高于 off(0.35)
     TEST_ASSERT_TRUE_MESSAGE(S.vocal < C.onset_on && S.vocal > C.onset_off,
         "夹具没把 vocal 送进滞回带，这条测试就什么都没检验");
     phase(2000.0f, 0.90f);      // 再拉回去
