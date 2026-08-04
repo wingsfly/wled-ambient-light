@@ -69,6 +69,10 @@ label.file:focus-within span{outline:2px solid var(--amber);outline-offset:2px}
   color:var(--dim);border-radius:0}
 .seg button:last-child{border-right:0}
 .seg button[aria-pressed="true"]{background:var(--glass);color:var(--amber);font-weight:600}
+/* 灯效网格不是 .seg（它是 grid 不是横排），选中态要单独写一条 ——
+   漏了这条的后果是「点了哪个完全看不出来」。 */
+#fxgrid button[aria-pressed="true"]{background:var(--glass);color:var(--amber);
+  font-weight:600;border-color:var(--amber)}
 /* 自动模式下当前实际在放的那个效果：虚线框，与「我按了哪个」区分开 */
 .seg button.autopick{outline:1px dashed var(--amber);outline-offset:-3px}
 
@@ -817,7 +821,10 @@ const CELLS=[["BPM",f=>f.bpm.toFixed(1),f=>f.lk?"on":"off"],
  ["动态",f=>f.dy.toFixed(2),f=>f.dy>0.7?"on":(f.dy<0.25?"warn":"")],
  ["打击占比",f=>f.pc.toFixed(2),f=>f.pc>0.55?"amber":""],
  ["小节",f=>`${f.bpos+1}/${f.bpb}`,f=>f.db?"on":(f.bc>0.4?"amber":"off")],
- ["自动选中",f=>FXNAMES[f.afx]||"—",()=>"amber"]];
+ ["自动选中",f=>FXNAMES[f.afx]||"—",()=>"amber"],
+ // **新加的特征必须同时进读数面板。** 这次「人声灯效不亮」查了半天，
+ // 直接原因就是界面上看不到 vocal 到底是多少。
+ ["人声",f=>f.voc==null?"—":f.voc.toFixed(2),f=>f.voc>0.55?"on":(f.voc>0.2?"amber":"off")]];
 $("read").innerHTML=CELLS.map(c=>
   `<div class="cell"><span class="k">${c[0]}</span><span class="v">—</span></div>`).join("");
 const vals=[...$("read").querySelectorAll(".v")];

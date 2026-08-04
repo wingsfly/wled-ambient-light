@@ -892,16 +892,20 @@ inline void fxHarmonyShift(const FxState &st, const AudioFrame &f,
 // 人声越强，光晕越宽越亮；器乐段落里整管暗下去。
 inline void fxVocalHalo(const FxState &st, const AudioFrame &f,
                         const Geometry &g, Rgb *out) {
-    if (st.voc <= 0.01f) return;
-    const float w = 0.10f + 0.28f * st.voc;          // 光晕半宽
+    // **有声音就得看得见一点东西。** 原来写的是 voc<=0.01 直接 return，
+    // 于是人声度低的素材上整根管全黑 —— 用户会以为灯效坏了，而不是
+    // 「这段没人声」。与 fxBeatRunner 的 25% 底光同一条规矩：
+    // 真静音熄灭，有声音就留一个能看出「它在待命」的最小光点。
+    if (f.gated || !(f.rms_fast > 0.003f)) return;
+    const float lvl = 0.10f + 0.90f * st.voc;        // 待机 10%
+    const float w = 0.06f + 0.32f * st.voc;          // 光晕半宽
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
             const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
             const float d = fabsf(u - st.voc_u) / w;
             const float v = (d < 1.0f) ? (1.0f - d * d) : 0.0f;   // 抛物线，边缘柔
-            out[mapPixel(g, (Side)s, u)] = hsv(st.key_hue + 0.08f, 0.45f, perceptual(v * st.voc));
+            out[mapPixel(g, (Side)s, u)] = hsv(st.key_hue + 0.08f, 0.45f, perceptual(v * lvl));
         }
-    (void)f;
 }
 
 // 气息呼吸：整管随人声存在度呼吸。**没有位置信息，只有明暗** ——
@@ -970,8 +974,11 @@ inline void fxDuetSplit(const FxState &st, const AudioFrame &f,
 // 它画的是乐句的起点，不是人声的持续。
 inline void fxLyricPulse(const FxState &st, const AudioFrame &f,
                          const Geometry &g, Rgb *out) {
-    const float v = perceptual(st.lyric);
-    if (v <= 0.0f) return;
+    // 同 fxVocalHalo：句与句之间要暗，但不能暗到看不出效果在跑。
+    if (f.gated || !(f.rms_fast > 0.003f)) return;
+    // 底光加在 perceptual **之后** —— 加在之前会被平方压没（0.09²=0.008，
+    // 折算成 RGB 只有 2，看不见）。
+    const float v = 0.10f + 0.90f * perceptual(st.lyric);
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
             const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
@@ -981,7 +988,6 @@ inline void fxLyricPulse(const FxState &st, const AudioFrame &f,
             const float k = (d < spread) ? (1.0f - d / spread) : 0.0f;
             out[mapPixel(g, (Side)s, u)] = hsv(st.key_hue + 0.42f, 0.6f, v * k);
         }
-    (void)f;
 }
 
 // ══ 氛围类 ════════════════════════════════════════════════

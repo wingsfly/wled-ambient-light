@@ -30,9 +30,11 @@ struct LampFrameC {
     float bpm, conf, phase, rms, peak, gain, rate, centroid, flatness;
     float key_conf, harmony;
     float f0, f0_conf, mood, trend, novelty, dynamics, percussive, bar_conf;
+    float vocal;                 // 人声/主旋律存在度，见 lamp_vocal.h
     float bands_h[NUM_BANDS], bands_p[NUM_BANDS];
     int32_t lock, gate, onset, preset, key_root, key_major, f0_voiced, section;
     int32_t bpb, bar_pos, bar_index, downbeat, auto_fx;
+    int32_t vocal_onset;
     float auto_score[5];      // 自动选灯效的五个候选分数，排查用
     float auto_duty, auto_jit, auto_perc, auto_split;
     uint8_t px[TOTAL_LEDS * 3];      // C++ 效果层渲染的 96 个 RGB
@@ -192,6 +194,7 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         o.mood = f.mood; o.trend = f.energy_trend;
         o.novelty = f.section_novelty; o.section = f.section_change ? 1 : 0;
         o.dynamics = f.dynamics; o.percussive = f.percussive;
+        o.vocal = f.vocal; o.vocal_onset = f.vocal_onset ? 1 : 0;
         memcpy(o.bands_h, f.bands_h, sizeof(o.bands_h));
         memcpy(o.bands_p, f.bands_p, sizeof(o.bands_p));
         o.auto_fx = (int32_t)h->fx;
