@@ -60,18 +60,68 @@ def load_wled():
     w.wledfx_mode_blocked.restype = C.c_int32
     w.wledfx_mode_blocked.argtypes = [C.c_int32]
     w.wledfx_palette_count.restype = C.c_int32
+    w.wledfx_palette_name.restype = C.c_char_p
+    w.wledfx_palette_name.argtypes = [C.c_int32]
+    w.wledfx_palette_swatch.restype = C.c_int32
+    w.wledfx_palette_swatch.argtypes = [C.c_int32, C.POINTER(C.c_uint8), C.c_int32]
+    w.wledfx_custom_palette.restype = C.c_int32
+    w.wledfx_custom_palette.argtypes = [C.c_int32, C.POINTER(C.c_uint32), C.c_int32]
+    w.wledfx_custom_palette_count.restype = C.c_int32
+    w.wledfx_colorfulness.restype = C.c_int32
+    w.wledfx_colorfulness.argtypes = [C.c_int32] * 3
     w.wledfx_set.argtypes = [C.c_int32] * 4 + [C.c_uint32] * 3
     w.wledfx_render.argtypes = [C.c_uint32, C.POINTER(C.c_uint8)]
     w.wledfx_init()
     return w
 
-def wled_catalog(w):
-    """效果表直接取自 WLED 的 _modeData，界面不用手抄一份。"""
+SWATCH_N = 12          # 每个调色板取样几个点（够画出渐变条了）
+CF_FRAMES = 60         # 彩色度的测量窗口：60 帧 × 25ms = 1.5 秒
+
+def wled_palettes(w, n=SWATCH_N):
+    """调色板清单：名字与取样色都来自 WLED 自己的表。
+
+    **ID 不连续**：固定板 0..71，自定义板从 200 往下（customPalettes[0] 是
+    200）。所以这里返回的是显式 ID 列表，界面不能拿 count 当滑块上限。
+    """
+    buf = (C.c_uint8 * (n * 3))()
+    ids = list(range(72))                                   # FIXED_PALETTE_COUNT
+    ids += [200 - k for k in range(w.wledfx_custom_palette_count())]
+    out = []
+    for pid in ids:
+        w.wledfx_palette_swatch(pid, buf, n)
+        sw = [f"{buf[k*3]:02x}{buf[k*3+1]:02x}{buf[k*3+2]:02x}" for k in range(n)]
+        out.append({"i": pid, "n": w.wledfx_palette_name(pid).decode("utf-8", "replace"),
+                    "s": sw})
+    return out
+
+def wled_colorfulness(w, pal):
+    """每个效果的实测彩色度 0-100。
+
+    **按画出来的像素测，不看 _modeData 声明的颜色槽** —— 220 个效果里有
+    194 个都声明「用调色板」，那个字段区分不出任何东西。
+    口径见 host_glue.cpp 的 wledfx_colorfulness()：色相直方图的归一化熵
+    × 亮度加权平均饱和度。窗口只有 1.5 秒，所以像 Sunrise 这种以分钟为
+    尺度演进的效果会偏低 —— 这是口径的已知局限，不是它不彩色。
+    """
+    return {i: w.wledfx_colorfulness(i, pal, CF_FRAMES)
+            for i in range(w.wledfx_mode_count())}
+
+def wled_catalog(w, pal, mode, cols):
+    """效果表直接取自 WLED 的 _modeData，界面不用手抄一份。
+
+    **顺序不能反。** 2-5 号调色板是由段颜色现算出来的，0 号「Default」
+    还随当前效果变 —— 所以要先把界面此刻的效果与颜色设进去再采色卡。
+    彩色度那一轮会把段停在最后一个效果上，采色卡放它后面就全错了。
+    """
+    w.wledfx_set(mode, 128, 128, pal, *cols)
+    pals = wled_palettes(w)
+    cf = wled_colorfulness(w, pal)
     out = []
     for i in range(w.wledfx_mode_count()):
         raw = w.wledfx_mode_data(i).decode("utf-8", "replace")
-        out.append({"i": i, "d": raw, "x": bool(w.wledfx_mode_blocked(i))})
-    return {"modes": out, "palettes": w.wledfx_palette_count()}
+        out.append({"i": i, "d": raw, "x": bool(w.wledfx_mode_blocked(i)),
+                    "c": cf.get(i, -1)})
+    return {"modes": out, "palettes": w.wledfx_palette_count(), "pals": pals}
 
 def load():
     if not os.path.exists(LIB):
@@ -273,7 +323,32 @@ class Handler(SimpleHTTPRequestHandler):
         q = parse_qs(u.query)
         gi = lambda k, d=0: int(q.get(k, [d])[0])
         if u.path == "/wled/catalog":
-            return self._json(wled_catalog(w))
+            # 彩色度要真的跑帧才测得出来，会把渲染状态推着走 ——
+            # 清掉参数缓存，逼下一次 /wled/frame 重新 set 一遍。
+            with Handler.wlock:
+                cat = wled_catalog(w, gi("pal", 0), gi("m", 0),
+                                   (gi("c0", 0xFF0000), gi("c1", 0x00FF00),
+                                    gi("c2", 0x0000FF)))
+                Handler.wargs = None
+            return self._json(cat)
+        if u.path == "/wled/custompal":
+            # 自定义调色板：c=ff0000,00ff00,... （2-16 个色标，等距铺开）
+            try:
+                cols = [int(x, 16) & 0xFFFFFF
+                        for x in q.get("c", [""])[0].split(",") if x]
+            except ValueError:
+                return self._json({"err": "颜色要写成 6 位十六进制"})
+            if len(cols) < 2:
+                return self._json({"err": "至少要两个色标"})
+            arr = (C.c_uint32 * len(cols))(*cols)
+            slot = gi("slot", -1)
+            with Handler.wlock:
+                pid = w.wledfx_custom_palette(slot, arr, len(cols))
+                if pid < 0:
+                    return self._json({"err": "自定义调色板槽位已满"})
+                pals = wled_palettes(w)
+                Handler.wargs = None
+            return self._json({"id": pid, "pals": pals})
         if u.path == "/wled/frame":
             args = (gi("m"), gi("sx", 128), gi("ix", 128), gi("pal", 0),
                     gi("c0", 0xFF0000), gi("c1", 0x00FF00), gi("c2", 0x0000FF))

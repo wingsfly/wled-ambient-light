@@ -248,8 +248,6 @@ footer p{margin:0 0 7px}
       <input type="range" id="wsx" min="0" max="255" value="128" style="width:120px" aria-label="速度"></div>
     <div class="grp"><span class="lbl">强度 <span id="wixv">128</span></span>
       <input type="range" id="wix" min="0" max="255" value="128" style="width:120px" aria-label="强度"></div>
-    <div class="grp"><span class="lbl">调色板 <span id="wpalv">0</span></span>
-      <input type="range" id="wpal" min="0" max="0" value="0" style="width:120px" aria-label="调色板"></div>
     <div class="grp"><span class="lbl">灯管显示</span>
       <div class="seg" id="wdm">
         <button data-v="1" aria-pressed="true">外壳透光</button><button data-v="0">裸灯珠</button>
@@ -265,8 +263,35 @@ footer p{margin:0 0 7px}
     <div>
       <div class="card">
         <h2>效果列表 · 名字与参数取自 WLED 的 _modeData</h2>
-        <div id="wlist" style="max-height:330px;overflow:auto;display:grid;
-             grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:4px"></div>
+        <div class="controls" style="margin:0 0 6px">
+          <div class="seg" id="wfilter">
+            <button data-v="ok" aria-pressed="true">一维可用</button><button data-v="rich">彩色 ≥60</button
+            ><button data-v="audio">音频反应</button><button data-v="all">全部</button>
+          </div>
+          <div class="seg" id="wsort">
+            <button data-v="c" aria-pressed="true">按彩色度</button><button data-v="i">按序号</button>
+          </div>
+        </div>
+        <div id="wlist" style="max-height:300px;overflow:auto;display:grid;
+             grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px"></div>
+      </div>
+
+      <div class="card">
+        <h2>调色板 · <span id="wpalname">—</span></h2>
+        <p class="hint" style="margin:0 0 6px">
+          色卡是拿 WLED 自己的 <code>loadPalette()</code> 采样出来的，
+          与效果实际取到的色同源。<b>ID 不连续</b>：固定板 0–71，自定义板从 200 往下。
+        </p>
+        <div id="wpals" style="max-height:150px;overflow:auto;display:grid;
+             grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:4px"></div>
+        <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span class="lbl">自定义</span>
+          <span id="wcust" style="display:flex;gap:4px"></span>
+          <button id="wcadd" title="加一个色标">＋</button>
+          <button id="wcdel" title="去掉最后一个色标">－</button>
+          <button id="wcapply">生成并应用</button>
+          <span id="wcmsg" class="hint"></span>
+        </div>
       </div>
       <div id="wstatus">载入中…</div>
     </div>
@@ -805,44 +830,130 @@ const wcfg = { m: 0, sx: 128, ix: 128, pal: 0 };
 const WDT = 33;                       // 30fps，与真机渲染节拍同量级
 const WBATCH = 45;                    // 一批 1.5 秒
 
+let wPals = [], wFilter = "ok", wSort = "c";
+
 function wMeta(i){ return (wModes[i] && wModes[i].d) || ""; }
 function wName(i){ return wMeta(i).split("@")[0] || "?"; }
-// _modeData 的参数标签："Name@速度标签,强度标签;颜色;调色板;标志"
+// _modeData 的分段："Name@参数;颜色;调色板;标志;默认值"
+function wSegs(i){ const t = wMeta(i).split("@")[1]; return (t || "").split(";"); }
+// _modeData 的参数标签
 function wLabels(i){
-  const seg = wMeta(i).split("@")[1];
-  const p = (seg ? seg.split(";")[0] : "").split(",");
+  const p = (wSegs(i)[0] || "").split(",");
   const pick = (k, dflt) => (!p[k] || p[k] === "!" || p[k] === "") ? dflt : p[k];
   return [pick(0, "速度"), pick(1, "强度")];
+}
+// 标志位段。'1'=一维 '2'=二维 'v'=音量反应 'f'=频谱反应。
+// 空 = 两种都行。个别效果（Flow Stripe）少写了一个分号，默认值串跑到了
+// 标志位上 —— 带 '=' 就当它是默认值，别误判成二维。
+function wFlags(i){ const f = wSegs(i)[3] || ""; return f.includes("=") ? "" : f; }
+function wIs2DOnly(i){ const f = wFlags(i); return f.includes("2") && !f.includes("1"); }
+function wIsAudio(i){ const f = wFlags(i); return f.includes("v") || f.includes("f"); }
+function wScore(i){ const m = wModes[i]; return (m && typeof m.c === "number") ? m.c : -1; }
+
+function wVisible(m){
+  if (wName(m.i) === "RSVD") return false;           // 上游的保留占位，WLED 自己的界面也不列
+  if (wFilter === "all")   return true;
+  if (wFilter === "rich")  return !m.x && !wIs2DOnly(m.i) && wScore(m.i) >= 60;
+  if (wFilter === "audio") return !m.x && !wIs2DOnly(m.i) && wIsAudio(m.i);
+  return !m.x && !wIs2DOnly(m.i);                    // ok：这台灯上真的能看到东西的
+}
+
+function wRenderList(){
+  const list = wModes.filter(wVisible);
+  list.sort(wSort === "c" ? (a, b) => wScore(b.i) - wScore(a.i) : (a, b) => a.i - b.i);
+  $("wlist").innerHTML = list.map(m => {
+    const s = wScore(m.i), bad = m.x || wIs2DOnly(m.i);
+    const why = m.x ? "主机端会崩溃或画不出东西，已屏蔽"
+              : wIs2DOnly(m.i) ? "只有二维版本，这台灯是一维灯管"
+              : `实测彩色度 ${s}／100`;
+    // 分数条：绿得越满越彩色。这是**测出来的**，不是按 _modeData 猜的。
+    return `<button data-m="${m.i}" title="${why}" ${bad ? "disabled" : ""}
+      style="text-align:left;padding:3px 6px;font-size:12px;${bad ? "opacity:.35" : ""}">
+      <span style="display:block">${wName(m.i)}${wIsAudio(m.i) ? " ♪" : ""}</span>
+      <span style="display:block;height:3px;margin-top:2px;border-radius:2px;
+        background:linear-gradient(90deg,#4ade80 ${Math.max(0, s)}%,#2a2a2a ${Math.max(0, s)}%)"></span>
+    </button>`; }).join("");
+  [...$("wlist").children].forEach(x => x.setAttribute("aria-pressed", +x.dataset.m === wcfg.m));
+  const shown = list.length, tot = wModes.filter(m => wName(m.i) !== "RSVD").length;
+  $("wstatus").textContent = `列出 ${shown}／${tot} 个效果 · ${wPals.length} 个调色板 · 全部来自 WLED 的 FX.cpp`;
+}
+
+function wRenderPals(){
+  const grad = p => `linear-gradient(90deg,${p.s.map(h => "#" + h).join(",")})`;
+  $("wpals").innerHTML = wPals.map(p =>
+    `<button data-p="${p.i}" title="ID ${p.i}" aria-pressed="${p.i === wcfg.pal}"
+      style="padding:2px 4px;font-size:11px;text-align:left">
+      <span style="display:block;height:12px;border-radius:2px;background:${grad(p)}"></span>
+      <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.n}</span>
+    </button>`).join("");
+  const cur = wPals.find(p => p.i === wcfg.pal);
+  $("wpalname").textContent = cur ? `${cur.n}（ID ${cur.i}）` : `ID ${wcfg.pal}`;
 }
 
 async function wLoad(){
   try {
-    const r = await fetch("/wled/catalog");
+    const r = await fetch("/wled/catalog?" + new URLSearchParams({ pal: wcfg.pal, m: wcfg.m }));
     const d = await r.json();
     if (d.err) { $("wstatus").textContent = d.err; return; }
-    wModes = d.modes;
+    wModes = d.modes; wPals = d.pals || [];
     $("wmode").max = wModes.length - 1;
-    $("wpal").max  = Math.max(0, d.palettes - 1);
-    $("wlist").innerHTML = wModes.map(m =>
-      `<button data-m="${m.i}" ${m.x ? "disabled title='主机端会崩溃，已屏蔽'" : ""}
-        style="text-align:left;padding:3px 6px;font-size:12px;${m.x?"opacity:.35":""}">${wName(m.i)}</button>`).join("");
-    $("wlist").onclick = e => { const b = e.target.closest("button[data-m]");
-      if (b && !b.disabled) { $("wmode").value = b.dataset.m; wPick(+b.dataset.m); } };
-    $("wstatus").textContent = `${wModes.length} 个效果 · ${d.palettes} 个调色板 · 全部来自 WLED 的 FX.cpp`;
-    wPick(0);
+    wRenderList(); wRenderPals();
+    wPick(wModes.filter(wVisible)[0]?.i ?? 0);
   } catch (e) { $("wstatus").textContent = "载入失败：" + e; }
 }
 
 function wPick(m){
-  if (wModes[m] && wModes[m].x) { $("wstatus").textContent = wName(m) + " 在主机端会崩溃，已屏蔽"; return; }
+  if (wModes[m] && wModes[m].x) { $("wstatus").textContent = wName(m) + " 已屏蔽，理由见按钮上的提示"; return; }
   wcfg.m = m; wBuf = [];
   const [a, b] = wLabels(m);
-  $("wname").textContent = wName(m);
+  $("wname").textContent = wName(m) + `（彩色度 ${wScore(m)}）`;
   $("wsxv").previousSibling.textContent = " " + a + " ";
   $("wixv").previousSibling.textContent = " " + b + " ";
   [...$("wlist").children].forEach(x => x.setAttribute("aria-pressed", +x.dataset.m === m));
   wFetch();
 }
+
+// 换调色板要重算彩色度 —— 那个分数本来就是「在这个调色板下」测的。
+let wPalTimer = null;
+function wSetPal(id){
+  wcfg.pal = id; wBuf = []; wRenderPals(); wFetch();
+  clearTimeout(wPalTimer);
+  wPalTimer = setTimeout(async () => {
+    try {
+      const d = await (await fetch("/wled/catalog?" +
+        new URLSearchParams({ pal: wcfg.pal, m: wcfg.m }))).json();
+      if (d.modes) { wModes = d.modes; wRenderList(); }
+    } catch (e) { /* 分数没刷新不影响看画面，静默即可 */ }
+  }, 250);
+}
+
+// ── 自定义调色板 ─────────────────────────────────────────
+// 色标等距铺开，插值交给 WLED 自己的 loadDynamicGradientPalette()，
+// 与真机从 /palette{N}.json 读进来的走同一条路。
+const WCUST_DEFAULT = ["#ff0000", "#ffcc00", "#00a0ff", "#ff00ff"];
+let wCust = WCUST_DEFAULT.slice();
+function wRenderCust(){
+  $("wcust").innerHTML = wCust.map((c, k) =>
+    `<input type="color" data-k="${k}" value="${c}" aria-label="色标 ${k + 1}"
+       style="width:32px;height:24px;padding:0;border:0;background:none">`).join("");
+  $("wcust").oninput = e => { const i = e.target.closest("input[data-k]");
+    if (i) wCust[+i.dataset.k] = i.value; };
+  $("wcdel").disabled = wCust.length <= 2;
+  $("wcadd").disabled = wCust.length >= 16;
+}
+$("wcadd").onclick = () => { if (wCust.length < 16) { wCust.push("#ffffff"); wRenderCust(); } };
+$("wcdel").onclick = () => { if (wCust.length > 2) { wCust.pop(); wRenderCust(); } };
+$("wcapply").onclick = async () => {
+  $("wcmsg").textContent = "生成中…";
+  try {
+    const c = wCust.map(x => x.slice(1)).join(",");
+    const d = await (await fetch("/wled/custompal?c=" + c)).json();
+    if (d.err) { $("wcmsg").textContent = d.err; return; }
+    wPals = d.pals; wSetPal(d.id);
+    $("wcmsg").textContent = `已生成 ID ${d.id}`;
+  } catch (e) { $("wcmsg").textContent = "失败：" + e; }
+};
+wRenderCust();
 
 async function wFetch(){
   if (wFetching) return;
@@ -861,9 +972,17 @@ function wTick(){
 }
 
 $("wmode").oninput = e => wPick(+e.target.value);
-for (const [id, key, out] of [["wsx","sx","wsxv"], ["wix","ix","wixv"], ["wpal","pal","wpalv"]])
+for (const [id, key, out] of [["wsx","sx","wsxv"], ["wix","ix","wixv"]])
   $(id).oninput = e => { wcfg[key] = +e.target.value; $(out).textContent = e.target.value;
                          wBuf = []; wFetch(); };
+$("wlist").onclick = e => { const b = e.target.closest("button[data-m]");
+  if (b && !b.disabled) { $("wmode").value = b.dataset.m; wPick(+b.dataset.m); } };
+$("wpals").onclick = e => { const b = e.target.closest("button[data-p]");
+  if (b) wSetPal(+b.dataset.p); };
+for (const [id, set] of [["wfilter", v => wFilter = v], ["wsort", v => wSort = v]])
+  $(id).onclick = e => { const b = e.target.closest("button"); if (!b) return;
+    [...e.currentTarget.children].forEach(x => x.setAttribute("aria-pressed", x === b));
+    set(b.dataset.v); wRenderList(); };
 $("wdm").onclick = e => { const b = e.target.closest("button"); if (!b) return;
   [...e.currentTarget.children].forEach(x => x.setAttribute("aria-pressed", x === b));
   wDiffuse = +b.dataset.v === 1; };

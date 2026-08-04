@@ -91,6 +91,19 @@ class HostBus : public Bus {
     HostBus(uint16_t start, uint16_t len)
       : Bus(TYPE_WS2812_RGB, start, RGBW_MODE_MANUAL_ONLY, len, false, false) {
         _valid = true;
+        // ⚠️ **这三行必须有。** _hasRgb/_hasWhite/_hasCCT 不是基类 Bus 构造
+        // 里设的，而是 BusDigital / BusPwm 各自在构造里设的
+        // （bus_manager.cpp:156-158）。HostBus 直接派生自 Bus，不补就是
+        // 未初始化的裸 bool，实测读出来是 false。
+        //
+        // 后果比看上去严重得多：Segment::refreshLightCapabilities() 于是
+        // 判定这个段「没有 RGB 能力」，而 color_from_palette() 的第一行是
+        //     if ((palette == 0 && mcol < NUM_COLORS) || !_isRGB) return 段颜色;
+        // —— **所有调色板全部失效**，220 个效果里那 194 个调色板驱动的
+        // 统统退化成单色/三原色。表现出来就是「WLED 的彩色灯效怎么这么少」。
+        _hasRgb   = hasRGB(TYPE_WS2812_RGB);
+        _hasWhite = hasWhite(TYPE_WS2812_RGB);
+        _hasCCT   = hasCCT(TYPE_WS2812_RGB);
     }
     void     show() override {}
     void     setPixelColor(unsigned pix, uint32_t c) override {
@@ -202,6 +215,170 @@ int32_t wledfx_mode_blocked(int32_t i) {
 }
 int32_t wledfx_palette_count(void) { return (int32_t)getPaletteCount(); }
 
+// ── 调色板 ────────────────────────────────────────────────
+//
+// **调色板 ID 不是 0..count-1 的连续区间。** 固定板是 0..71，自定义板的 ID
+// 从 200 **往下**长（customPalettes[0] 就是 ID 200），usermod 板从 255 往下。
+// 界面必须按 ID 走，不能拿 count 当滑块上限 —— 一有自定义板就错位。
+
+// Segment::loadPalette() 是 protected 的，_default_palette 更是 private。
+// 与其想办法绕过访问控制（这个仓库刚被一次 UB 咬过，见 Arduino.h 里
+// min/max 的说明），不如走上游自己每帧都在走的那条路：
+//
+//   Segment::beginDraw() → loadPalette(Segment::_currentPalette, palette)
+//
+// beginDraw 与 getCurrentPalette 都是 public。在主段上临时换个板号跑一次，
+// 拿到的就是效果真正会用的那份表 —— 包括 0 号「Default」随效果变、
+// 2-5 号由段颜色生成这些细节，一个都不用我重写。
+//
+// 只写 seg.palette 字段而**不调 setPalette()**：后者会起过渡，
+// 我们只是想看一眼，不该改动画面。
+namespace {
+void hostLoadPalette(CRGBPalette16 &out, int32_t id) {
+    Segment &seg = strip.getMainSegment();
+    const uint8_t save = seg.palette;
+    seg.palette = (uint8_t)id;
+    seg.beginDraw(0xFFFFU);          // 0xFFFF：跳过过渡混色，要的是纯粹的目标板
+    out = Segment::getCurrentPalette();
+    seg.palette = save;
+    seg.beginDraw(0xFFFFU);          // 还原 _currentPalette，别把下一帧带歪
+}
+}  // namespace
+
+// 调色板名字：抽 WLED 自己的 JSON_palette_names，不另抄一份。
+// 返回的是静态缓冲，调用方要立刻用掉（服务端有全局锁，够了）。
+const char *wledfx_palette_name(int32_t id) {
+    static char buf[40];
+    if (id >= 0 && id < (int32_t)FIXED_PALETTE_COUNT) {
+        buf[0] = 0;
+        extractModeName((uint8_t)id, JSON_palette_names, buf, sizeof(buf) - 1);
+        if (buf[0]) return buf;
+    }
+    const int slot = WLED_CUSTOM_PALETTE_ID_BASE - id;
+    if (slot >= 0 && slot < (int)customPalettes.size()) {
+        snprintf(buf, sizeof buf, "自定义 %d", slot + 1);
+        return buf;
+    }
+    snprintf(buf, sizeof buf, "#%d", (int)id);
+    return buf;
+}
+
+// 取样：n 个等距点的 RGB，直接来自上面那份表，
+// 所以预览色与效果实际取到的色是同一个来源。
+int32_t wledfx_palette_swatch(int32_t id, uint8_t *rgb, int32_t n) {
+    if (!rgb || n < 2) return 0;
+    CRGBPalette16 pal;
+    hostLoadPalette(pal, id);
+    for (int32_t i = 0; i < n; ++i) {
+        const CRGB c = ColorFromPalette(pal, (uint8_t)((i * 255) / (n - 1)), 255, LINEARBLEND);
+        rgb[i * 3 + 0] = c.r; rgb[i * 3 + 1] = c.g; rgb[i * 3 + 2] = c.b;
+    }
+    return n;
+}
+
+// 自定义调色板：stops 是 n 个 0xRRGGBB，等距铺开后交给 WLED 自己的
+// loadDynamicGradientPalette() 插值 —— 与真机从 /palette{N}.json 读进来
+// 的走同一条路（colors.cpp 的 loadCustomPalettes()），所以模拟出的渐变
+// 与刷进灯里之后一致。
+// slot < 0 表示追加。返回 WLED 的调色板 ID（200 - slot），失败返回 -1。
+int32_t wledfx_custom_palette(int32_t slot, const uint32_t *stops, int32_t n) {
+    if (!stops || n < 2) return -1;
+    if (n > 16) n = 16;
+    if (slot < 0) slot = (int32_t)customPalettes.size();
+    if (slot >= (int32_t)WLED_MAX_CUSTOM_PALETTES) return -1;
+
+    // 上游用 memset(tcp,255,...) 铺底，末项索引正好是 255 —— 那就是终止标记。
+    byte tcp[4 * 16];
+    memset(tcp, 255, sizeof tcp);
+    for (int32_t i = 0; i < n; ++i) {
+        tcp[i * 4 + 0] = (byte)((i * 255) / (n - 1));
+        tcp[i * 4 + 1] = (byte)(stops[i] >> 16);
+        tcp[i * 4 + 2] = (byte)(stops[i] >>  8);
+        tcp[i * 4 + 3] = (byte)(stops[i]);
+    }
+    CRGBPalette16 p;
+    p.loadDynamicGradientPalette(tcp);
+    // ID 是往下长的，中间的空位补灰，免得后面的板串位（上游同样这么做）
+    while ((int32_t)customPalettes.size() <= slot)
+        customPalettes.push_back(CRGBPalette16(CRGB(128, 128, 128)));
+    customPalettes[slot] = p;
+    return WLED_CUSTOM_PALETTE_ID_BASE - slot;
+}
+
+int32_t wledfx_custom_palette_count(void) { return (int32_t)customPalettes.size(); }
+
+// 「彩色度」0..100。
+//
+// **按实际画出来的像素测，不看 _modeData 声明的颜色槽。** 220 个效果里
+// 有 194 个都声明「用调色板」，那个字段区分不出任何东西；真正决定观感的
+// 是这个效果把调色板铺开了多少 —— 是扫过整个色环，还是只在橙红区打转。
+//
+// 口径：色相直方图（24 桶）的归一化熵 × 亮度加权的平均饱和度。
+//   · 全黑 / 纯白 / 灰 → 0（饱和度为 0）
+//   · 单一色相来回呼吸 → 低（熵为 0）
+//   · 铺满色环 → 高
+// 熵与饱和度相乘而不是相加：两者缺一就不算「彩色」。
+//
+// ⚠️ 会推进渲染状态（要真的跑帧才有像素可测）。调用方之后必须重新
+// wledfx_set() 一次，服务端靠清掉参数缓存来保证这点。
+int32_t wledfx_colorfulness(int32_t mode, int32_t palette, int32_t frames) {
+    if (mode < 0 || mode >= (int32_t)strip.getModeCount() || wledfx_mode_blocked(mode)) return -1;
+    if (frames < 12) frames = 12;
+    Segment &seg = strip.getMainSegment();
+    // **测量期间把过渡关掉。** 默认 700ms 的交叉淡入会让开头十几帧都还是
+    // 上一个效果的画面 —— 第一版就栽在这里：Colorloop / Colorful 测出来的
+    // 像素与 Solid 一模一样（都是 ff3d00），于是全都得 0 分。
+    const uint16_t saveTr = strip.getTransition();
+    strip.setTransition(0);
+    seg.setMode((uint8_t)mode, true);          // 带默认参数，与界面首次选中时一致
+    if (palette >= 0) seg.setPalette((uint8_t)palette);
+
+    const int kBins = 24;
+    double bins[kBins] = {0};
+    double satSum = 0, valSum = 0;
+    const uint32_t t0 = hostFxNowMs;
+    for (int32_t f = 0; f < frames; ++f) {
+        hostFxNowMs = t0 + (uint32_t)(f + 1) * 25u;
+        strip.service();
+        if (f * 3 < frames) continue;          // 前 1/3 让过渡与效果自身的启动跑完
+        for (size_t i = 0; i < g_pixels.size(); ++i) {
+            const uint32_t c = g_pixels[i];
+            const int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+            const int mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+            const int mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+            if (mx == 0) continue;
+            const double v = mx / 255.0;
+            const double sat = (mx - mn) / (double)mx;
+            valSum += v;
+            satSum += v * sat;
+            if (mx == mn) continue;            // 灰：没有色相可言
+            const double d = mx - mn;
+            double h;                          // 0..6
+            if (mx == r)      h = (g - b) / d + (g < b ? 6.0 : 0.0);
+            else if (mx == g) h = (b - r) / d + 2.0;
+            else              h = (r - g) / d + 4.0;
+            int k = (int)(h * kBins / 6.0);
+            if (k < 0) k = 0; if (k >= kBins) k = kBins - 1;
+            bins[k] += v * sat;                // 越亮越饱和的像素，越能代表这个效果的色相
+        }
+    }
+    strip.setTransition(saveTr);
+    if (valSum <= 0) return 0;
+    double tot = 0;
+    for (int i = 0; i < kBins; ++i) tot += bins[i];
+    double H = 0;
+    if (tot > 0) {
+        for (int i = 0; i < kBins; ++i) {
+            const double pr = bins[i] / tot;
+            if (pr > 0) H -= pr * log(pr);
+        }
+        H /= log((double)kBins);
+    }
+    const double meanSat = satSum / valSum;
+    int32_t score = (int32_t)(100.0 * H * meanSat + 0.5);
+    return score < 0 ? 0 : (score > 100 ? 100 : score);
+}
+
 void wledfx_set(int32_t mode, int32_t speed, int32_t intensity,
                 int32_t palette, uint32_t c0, uint32_t c1, uint32_t c2) {
     Segment &seg = strip.getMainSegment();
@@ -266,6 +443,11 @@ void wledfx_debug(int32_t *out) {
     out[26] = -1;
     out[27] = (int32_t)seg.currentBri();
     out[28] = (int32_t)strip.getTransition();
+    out[29] = (int32_t)seg.palette;
+    // 段的「能力位」。**这一位错了，所有调色板都会失效**：color_from_palette()
+    // 开头就是 `if ((palette == 0 && ...) || !_isRGB) return 段颜色;`，
+    // 于是每个效果都退化成单色/三原色 —— 看着像是 WLED 的效果不够花哨。
+    out[30] = (int32_t)seg.getLightCapabilities();   // bit0=RGB bit1=W bit2=CCT
 }
 
 } // extern "C"
