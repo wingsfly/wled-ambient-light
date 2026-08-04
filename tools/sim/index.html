@@ -283,7 +283,7 @@ footer p{margin:0 0 7px}
           色卡是拿 WLED 自己的 <code>loadPalette()</code> 采样出来的，
           与效果实际取到的色同源。<b>ID 不连续</b>：固定板 0–71，自定义板从 200 往下。
         </p>
-        <div id="wpals" style="max-height:150px;overflow:auto;display:grid;
+        <div id="wpals" style="max-height:212px;overflow:auto;display:grid;
              grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:4px"></div>
         <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span class="lbl">自定义</span>
@@ -859,9 +859,16 @@ function wVisible(m){
   return !m.x && !wIs2DOnly(m.i);                    // ok：这台灯上真的能看到东西的
 }
 
+// 当前过滤 + 排序之后的列表。**首次选中要用它的第一项**，
+// 而不是 wModes 里序号最小的那个 —— 后者是 Solid（彩色度 0），
+// 一进页面就是一条大红灯管，正是要避免的第一印象。
+function wShown(){
+  return wModes.filter(wVisible).sort(
+    wSort === "c" ? (a, b) => wScore(b.i) - wScore(a.i) : (a, b) => a.i - b.i);
+}
+
 function wRenderList(){
-  const list = wModes.filter(wVisible);
-  list.sort(wSort === "c" ? (a, b) => wScore(b.i) - wScore(a.i) : (a, b) => a.i - b.i);
+  const list = wShown();
   $("wlist").innerHTML = list.map(m => {
     const s = wScore(m.i), bad = m.x || wIs2DOnly(m.i);
     const why = m.x ? "主机端会崩溃或画不出东西，已屏蔽"
@@ -899,7 +906,7 @@ async function wLoad(){
     wModes = d.modes; wPals = d.pals || [];
     $("wmode").max = wModes.length - 1;
     wRenderList(); wRenderPals();
-    wPick(wModes.filter(wVisible)[0]?.i ?? 0);
+    wPick(wShown()[0]?.i ?? 0);
   } catch (e) { $("wstatus").textContent = "载入失败：" + e; }
 }
 
@@ -988,16 +995,23 @@ $("wdm").onclick = e => { const b = e.target.closest("button"); if (!b) return;
   [...e.currentTarget.children].forEach(x => x.setAttribute("aria-pressed", x === b));
   wDiffuse = +b.dataset.v === 1; };
 
-$("tabs").onclick = e => {
-  const b = e.target.closest("button"); if (!b) return;
-  [...e.currentTarget.children].forEach(x => x.setAttribute("aria-pressed", x === b));
-  const wled = b.dataset.v === "wled";
+// 页签写进 URL hash（#music / #wled）。刷新、收藏、发链接给别人都能停在
+// 同一页；无头截图也能直接落到指定页，不必先模拟一次点击。
+function selectTab(v){
+  const wled = v === "wled";
+  [...$("tabs").children].forEach(x => x.setAttribute("aria-pressed", x.dataset.v === v));
   $("pane-music").hidden = wled;
   $("pane-wled").hidden  = !wled;
   // 只在这一页可见时才跑定时器 —— 后台空转既费电又会让服务端白算
   if (wled) { if (!wModes.length) wLoad(); if (!wTimer) wTimer = setInterval(wTick, WDT); }
   else      { if (wTimer) { clearInterval(wTimer); wTimer = null; } }
+}
+$("tabs").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  location.hash = b.dataset.v;          // 触发下面的 hashchange
 };
+addEventListener("hashchange", () => selectTab(location.hash.slice(1) || "music"));
+selectTab(location.hash.slice(1) === "wled" ? "wled" : "music");
 
 // 页面走的时候才把设备还回去，指示灯不会一直亮着
 addEventListener("pagehide",()=>stopAll(false,true));
