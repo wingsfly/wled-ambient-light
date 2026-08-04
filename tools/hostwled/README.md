@@ -11,7 +11,8 @@
 
 ## 机制：软链 + 引号 include 的解析顺序
 
-上游文件**一个字都不改**。做法是把 `FX.cpp` 等软链进本目录再编译：
+上游文件**默认一个字都不改**（例外登记在 [`patches/`](../../patches/README.md)，
+目前只有一个）。做法是把 `FX.cpp` 等软链进本目录再编译：
 
 ```
 tools/hostwled/FX.cpp -> ../../wled00/FX.cpp

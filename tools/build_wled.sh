@@ -5,7 +5,9 @@
 #
 # 做法见 tools/hostwled/README.md：把上游源文件软链进构建目录，
 # 引号 include 于是先在那里找 —— 放了桩的用桩，没放的顺着 -I wled00 找原件。
-# **上游文件一个字都不改。**
+#
+# **上游文件默认一个字都不改**；确有必要的例外全部登记在 patches/，
+# 改动处留 `// [lamp-fork]` 标记。查现有补丁：grep -rn "\[lamp-fork\]" wled00/
 set -e
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -38,10 +40,14 @@ done
 (cd tools/hostwled && find . -mindepth 2 -name '*.h' -exec sh -c '
   mkdir -p "$1/$(dirname "$2")" && rm -f "$1/$2" && cp "$2" "$1/$2"' _ "$ROOT/$B" {} \;)
 
-# 3. 自检：上游一个字都不该动。写穿软链这类事故必须当场发现，
-#    而不是等到某次 git status 偶然瞥见。
+# 3. 自检：wled00/ 不该有**未提交**的改动。
+#
+#    比的是工作区与索引，所以 patches/ 里那些已提交的本地补丁不会触发它，
+#    而「cp 顺着软链写穿了上游文件」这类事故会当场暴露 —— 那正是要拦的。
+#    真要打新补丁，先提交再构建。
 if ! git -C "$ROOT" diff --quiet -- wled00/; then
-  echo "构建脚本改动了 wled00/ —— 这是 bug，已中止。受影响文件：" >&2
+  echo "wled00/ 有未提交的改动，已中止。要么是构建脚本写穿了软链（bug），" >&2
+  echo "要么是你正在打的本地补丁还没提交（见 patches/README.md）。受影响文件：" >&2
   git -C "$ROOT" diff --name-only -- wled00/ >&2
   exit 1
 fi

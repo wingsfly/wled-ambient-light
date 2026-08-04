@@ -9741,8 +9741,8 @@ void mode_particleDancingShadows(void) {
       //emit particle
       //set the particle source position:
       PartSys->sources[0].source.x = position * PS_P_RADIUS_1D;
-      uint32_t partidx = PartSys->sprayEmit(PartSys->sources[0]);
-      PartSys->particles[partidx].ttl = ttl;
+      int32_t partidx = PartSys->sprayEmit(PartSys->sources[0]); // [lamp-fork] see patches/0001
+      if (partidx >= 0) PartSys->particles[partidx].ttl = ttl;   // sprayEmit() returns -1 when no dead particle is left
       position++; //do the next pixel
     }
   }

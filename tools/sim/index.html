@@ -237,7 +237,8 @@ footer p{margin:0 0 7px}
   <div class="note">
     <b>这里跑的是 WLED 自己的 <code>FX.cpp</code>。</b>不是在页面上重写的仿制品 ——
     效果逻辑、调色板、缓动、粒子系统全是上游原件，通过一层主机端垫片编译成
-    <code>libwledfx</code>（做法见 <code>tools/hostwled/README.md</code>，上游文件一个字都没改）。
+    <code>libwledfx</code>（做法见 <code>tools/hostwled/README.md</code>；上游文件只打了一个
+    补丁，修的是 <code>PS Dancing Shadows</code> 的越界写，见 <code>patches/0001</code>）。
     所以这里看到的形状与颜色，与刷进灯里之后是同一份代码算出来的。
   </div>
 
