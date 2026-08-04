@@ -156,20 +156,10 @@ footer p{margin:0 0 7px}
 </div>
 
 <div class="controls">
-  <div class="grp"><span class="lbl">灯效</span>
+  <div class="grp"><span class="lbl">灯效 <span id="fxname">频段柱</span></span>
     <div class="seg" id="fx">
       <button data-v="-1">自动</button>
       <button data-v="0" aria-pressed="true">频段柱</button>
-      <button data-v="3">冲击柱</button>
-      <button data-v="4">拍点光点</button>
-      <button data-v="1">拍点脉冲</button>
-      <button data-v="2">电平扫描</button>
-      <button data-v="5">高低分离</button>
-      <button data-v="6">调性染色</button>
-      <button data-v="7">音级环</button>
-      <button data-v="8">彩色流动</button>
-      <button data-v="9">旋律线</button>
-      <button data-v="10" hidden></button>
     </div></div>
   <div class="grp"><span class="lbl">灯管显示</span>
     <div class="seg" id="dm">
@@ -194,6 +184,31 @@ footer p{margin:0 0 7px}
       <button data-v="0">氛围</button><button data-v="1">通用</button>
       <button data-v="2">电子</button><button data-v="3">打点</button>
     </div></div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <h2>按音乐特性挑灯效</h2>
+  <p class="hint" style="margin:0 0 8px">
+    标签按效果<b>真正读了哪几个音乐特征</b>打，不是按听感猜的。
+    「人声」测的是<b>处在人声音域、谐波型、能量集中在共振峰带的主旋律</b> ——
+    萨克斯独奏也会算，密集失真编曲里的人声反而抓不到（口径与实测见
+    <code>usermods/lamp/lamp_vocal.h</code>）。
+    「风格」是<b>策展推荐</b>，这套管线不做流派自动识别。
+  </p>
+  <div class="controls" style="margin:0 0 8px">
+    <div class="seg" id="fxtag">
+      <button data-v="0" aria-pressed="true">全部</button><button data-v="1">节拍</button
+      ><button data-v="2">旋律</button><button data-v="4">人声</button
+      ><button data-v="8">氛围</button><button data-v="16">频谱</button>
+    </div>
+    <div class="seg" id="fxgen">
+      <button data-v="0" aria-pressed="true">不限风格</button><button data-v="1">古典</button
+      ><button data-v="2">流行</button><button data-v="4">摇滚</button
+      ><button data-v="8">Rap</button><button data-v="16">电子</button>
+    </div>
+  </div>
+  <div id="fxgrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:4px"></div>
+  <div id="fxcount" class="hint" style="margin-top:8px"></div>
 </div>
 
 <div class="stage">
@@ -303,8 +318,36 @@ footer p{margin:0 0 7px}
 <script>
 const SR=22050, NB=16, NLED=48;
 const PRESETS=["氛围/古典","通用","电子/鼓机","极限打点"];
-const FXNAMES=["频段柱","拍点脉冲","电平扫描","冲击柱","拍点光点",
-               "高低分离","调性染色","音级环","彩色流动","旋律线"];
+// 灯效目录从服务端取（/fx/catalog），**页面里不再抄一份** ——
+// 名字、中文名、特征标签、风格推荐只有 usermods/lamp/lamp_fx.h 一份真相。
+let FXLIST = [], FXNAMES = [];
+let fxTagSel = 0, fxGenSel = 0;      // 0 = 不筛
+
+async function fxLoad(){
+  try {
+    const d = await (await fetch("/fx/catalog")).json();
+    FXLIST = d.fx || [];
+    FXNAMES = FXLIST.map(x => x.n);
+    fxRenderGrid();
+  } catch (e) { $("fxcount").textContent = "灯效目录载入失败：" + e; }
+}
+
+function fxRenderGrid(){
+  const list = FXLIST.filter(x =>
+    (!fxTagSel || (x.t & fxTagSel)) && (!fxGenSel || (x.g & fxGenSel)));
+  const TAG = ["节拍","旋律","人声","氛围","频谱"];
+  $("fxgrid").innerHTML = list.map(x => {
+    const tags = TAG.filter((_, k) => x.t >> k & 1).join("·");
+    return `<button data-fx="${x.i}" title="${x.e} · ${tags}"
+      style="text-align:left;padding:3px 6px;font-size:12px"
+      aria-pressed="${x.i === cfg.fx}">
+      <span style="display:block">${x.n}</span>
+      <span style="display:block;font-size:10px;opacity:.6">${tags}</span>
+    </button>`; }).join("");
+  $("fxcount").textContent =
+    `列出 ${list.length} / ${FXLIST.length} 个灯效` +
+    (fxTagSel || fxGenSel ? "（已筛选）" : "");
+}
 const KEYS=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 let ws=null, ac=null, node=null, stream=null, srcNode=null, playing=false;
 let micAc=null, muteNode=null, hb=0, watchdog=0;    // 麦克风用独立的 AudioContext，见 openMic
@@ -806,7 +849,26 @@ function segify(id,fn){
     [...e.currentTarget.children].forEach(x=>x.setAttribute("aria-pressed",x===b));
     fn(+b.dataset.v); pushCfg();};
 }
-segify("fx",v=>cfg.fx=v); segify("wb",v=>cfg.wb=v); segify("ps",v=>cfg.ps=v);
+segify("fx",v=>{cfg.fx=v; fxRenderGrid(); $("fxname").textContent=v<0?"自动":(FXNAMES[v]||"—");});
+segify("wb",v=>cfg.wb=v); segify("ps",v=>cfg.ps=v);
+
+// 灯效网格：点一个就选它，同时把上面那两个按钮的高亮清掉
+$("fxgrid").onclick = e => {
+  const b = e.target.closest("button[data-fx]"); if (!b) return;
+  cfg.fx = +b.dataset.fx;
+  [...$("fx").children].forEach(x => {
+    x.setAttribute("aria-pressed", +x.dataset.v === cfg.fx);
+    x.classList.remove("autopick");
+  });
+  $("fxname").textContent = FXNAMES[cfg.fx] || "—";
+  fxRenderGrid(); pushCfg();
+};
+// 两条筛选条。**筛选只影响列出来哪些，不改当前在放的效果** ——
+// 筛掉了正在放的那个也不该把画面换掉，那太意外了。
+for (const [id, set] of [["fxtag", v => fxTagSel = v], ["fxgen", v => fxGenSel = v]])
+  $(id).onclick = e => { const b = e.target.closest("button"); if (!b) return;
+    [...e.currentTarget.children].forEach(x => x.setAttribute("aria-pressed", x === b));
+    set(+b.dataset.v); fxRenderGrid(); };
 // 显示模式与扩散半径只影响画面，不发给后端 —— 真机的扩散是外壳的物理属性，
 // 不是灯效参数。所以这两个控件走的是 repaint，不是 pushCfg。
 $("dm").onclick=e=>{const b=e.target.closest("button"); if(!b)return;
@@ -1016,6 +1078,7 @@ selectTab(location.hash.slice(1) === "wled" ? "wled" : "music");
 // 页面走的时候才把设备还回去，指示灯不会一直亮着
 addEventListener("pagehide",()=>stopAll(false,true));
 
+fxLoad();
 drawTubes("0".repeat(96*6));
 connect().catch(()=>say("连不上服务器，确认 server.py 在跑",true));
 </script>
