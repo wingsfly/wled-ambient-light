@@ -653,13 +653,23 @@ class ADCS3Source : public AudioSource {
         uint32_t want = (uint32_t)(num_samples - got) * sizeof(adc_digi_output_data_t);
         if (want > sizeof(raw)) want = sizeof(raw);
         uint32_t rd = 0;
-        if (adc_digi_read_bytes(raw, want, &rd, 25) != ESP_OK) continue;
+        adc_digi_read_bytes(raw, want, &rd, 25);
+        // ⚠️ 只按 rd 判数据有效性，返回码只是状态提示（Rev.1 实板排障结论）：
+        //   ESP_ERR_TIMEOUT           —— 等不满请求量，携带部分数据返回；
+        //   ESP_ERR_INVALID_STATE(0x103) —— ringbuf 曾溢出（FFT 任务取数间隔里
+        //   DMA 填满 4KB 环形缓冲属常态），本次数据仍有效。
+        // 按返回码丢弃会把整条流丢光：实测 rc 恒 0x103、rd 却满速率 ~90KB/s。
+        if (rd == 0) continue;
         for (uint32_t i = 0; i + sizeof(adc_digi_output_data_t) <= rd && got < num_samples;
              i += sizeof(adc_digi_output_data_t)) {
-          adc_digi_output_data_t *d = (adc_digi_output_data_t *)(raw + i);
-          if (d->type2.channel != _channel) continue;   // 保险：只收本通道
+          // ⚠️ 不要用框架的 type2 位域解析 —— 实测 S3 的 TYPE2 条目里 channel
+          // 位于 bit13~15（raw=0x000067AF → data=0x7AF≈偏置电平、(raw>>13)&7=3
+          // =本通道），而 Arduino 2.0.x 头文件按 bit12 起解读出 6，通道过滤会把
+          // 全部样本扔光。按实测位型手工解析。
+          uint32_t v = *(uint32_t *)(raw + i);
+          if (((v >> 13) & 0x7) != _channel) continue;   // 保险：只收本通道
           // 12bit 中心化 → 对齐 int16 满幅（×16），偏置残差交给 useMicFilter
-          buffer[got++] = (FFTsampleType)(((int32_t)d->type2.data - 2048) * 16) * _sampleScale;
+          buffer[got++] = (FFTsampleType)(((int32_t)(v & 0xFFF) - 2048) * 16) * _sampleScale;
         }
       }
       while (got < num_samples) buffer[got++] = 0;
