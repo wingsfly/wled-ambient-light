@@ -794,6 +794,19 @@ class AudioReactive : public Usermod {
     #else
     int8_t mclkPin = MCLK_PIN;
     #endif
+
+    // ── lamp fork：3.5mm 线路输入插拔检测（AUD_DET）→ 自动切换音源 ──
+    // 板上 R13 100k 上拉 + C20 100nF 硬件去抖：拔出=3.3V，插入=0V（TRS 检测簧片接地）。
+    // 拔出后模拟输入端悬空成天线，拾取 WS2812 PWM 串扰（实测 peak 仍 53~60%），
+    // AGC 放大后灯效乱跳 —— 所以拔出必须自动切回 I2S 数字麦，不能停在 analog。
+    #ifndef SR_JACK_DETECT_PIN
+    int8_t jackDetectPin = -1;                 // -1 = 功能关闭（上游/无此硬件的板子）
+    #else
+    int8_t jackDetectPin = SR_JACK_DETECT_PIN;
+    #endif
+    bool jackInserted = false;                 // 去抖后的插入状态
+    unsigned long jackChangeStart = 0;         // 电平与去抖状态首次不一致的时刻；0=一致
+    static constexpr unsigned long JACK_DEBOUNCE_MS = 200;  // C20 已硬件去抖，软件只做确认
 #endif
 
     // new "V2" audiosync struct - 44 Bytes
@@ -883,6 +896,7 @@ class AudioReactive : public Usermod {
     static const char _analogmic[];  // lamp fork：S3 也要（ADCS3Source）
 #endif
     static const char _digitalmic[];
+    static const char _jackDetect[];   // lamp fork：AUD_DET 插拔检测
     static const char _addPalettes[];
     static const char _palName0[];
     static const char _palName1[];
@@ -1333,6 +1347,73 @@ class AudioReactive : public Usermod {
       return haveFreshData;
     }
 
+#ifdef ARDUINO_ARCH_ESP32
+    // ── lamp fork：AUD_DET 插拔检测 → 自动切换音源 ──────────────────────
+    // 插拔检测是否接管音源选择：引脚有效，且当前音源就是本板的两个候选
+    // （0=模拟线路输入，1=I2S 数字麦）之一。用户在 Sound Settings 里选了
+    // 其它类型（ES7243、network-only…）即视为显式退出自动切换。
+    bool jackSwitchActive() const {
+    #if defined(CONFIG_IDF_TARGET_ESP32S3)
+      return (jackDetectPin >= 0) && ((dmType == 0) || (dmType == 1));
+    #else
+      // 运行时热切换只在 S3 上成立：ADCS3Source（adc_digi）与 I2S 驱动的
+      // 卸载都干净。经典 ESP32 的 I2S-ADC 模式卸载不净（上游注释：换 analog
+      // 需断电），不启用。
+      return false;
+    #endif
+    }
+
+    // 运行时热切换音源，无需重启。挂起/恢复复用 onUpdateBegin —— 它就是
+    // OTA 与「UI 开关本 usermod」共用的那条已验证路径：置 disableSoundProcessing
+    // 后 delay(25) 等 FFT task 退出 getSamples()，再 vTaskSuspend，避免在
+    // i2s_read 阻塞中卸载驱动。只改运行态 dmType，不写 flash（插拔不磨损配置区）。
+    void switchAudioSourceForJack(uint8_t newType) {
+      if ((dmType == newType) && audioSource && audioSource->isInitialized()) return;
+
+      DEBUGSR_PRINTF("AR: jack detect - switching audio source %d -> %d\n", dmType, newType);
+      onUpdateBegin(true);              // 挂起 FFT task，复位音频状态
+      if (audioSource) {
+        audioSource->deinitialize();    // I2S: 卸驱动+还引脚；ADC: 停 adc_digi
+        delete audioSource;
+        audioSource = nullptr;
+      }
+      dmType = newType;
+
+    #if defined(CONFIG_IDF_TARGET_ESP32S3)
+      if (newType == 0) {
+        audioSource = new ADCS3Source(SAMPLE_RATE, BLOCK_SIZE);
+        delay(100);                     // 与 setup() 同款：给前端电路安顿时间
+        if (audioSource) audioSource->initialize(audioPin);
+      } else {
+        audioSource = new I2SSource(SAMPLE_RATE, BLOCK_SIZE);
+        delay(100);
+        if (audioSource) audioSource->initialize(i2swsPin, i2ssdPin, i2sckPin);
+      }
+    #endif
+      onUpdateBegin(false);             // 恢复 FFT task 与声音处理
+      if (!audioSource || !audioSource->isInitialized()) {
+        DEBUGSR_PRINTLN(F("AR: jack detect - new audio source failed to initialize"));
+      }
+    }
+
+    // loop() 每轮调用：~200ms 持续一致才确认状态；确认后向目标源收敛
+    // （收敛而非沿触发：网页端保存旧 Sound Settings 覆盖 dmType 后也能拉回）。
+    // OTA 期间（updateIsRunning）只累计不动作，结束后自然补切。
+    void handleJackDetect() {
+      if (!jackSwitchActive()) return;
+      const bool raw = (digitalRead(jackDetectPin) == LOW);   // 低电平 = 已插入
+      if (raw != jackInserted) {
+        const unsigned long now = millis();
+        if (jackChangeStart == 0) { jackChangeStart = now ? now : 1; return; }
+        if ((now - jackChangeStart) < JACK_DEBOUNCE_MS) return;
+        if (updateIsRunning) return;
+        jackInserted = raw;
+      }
+      jackChangeStart = 0;
+      const uint8_t desired = jackInserted ? 0 : 1;
+      if ((desired != dmType) && !updateIsRunning) switchAudioSourceForJack(desired);
+    }
+#endif
 
     //////////////////////
     // usermod functions//
@@ -1390,6 +1471,21 @@ class AudioReactive : public Usermod {
       #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
         if ((i2sckPin == I2S_PIN_NO_CHANGE) && (i2ssdPin >= 0) && (i2swsPin >= 0) && ((dmType == 1) || (dmType == 4)) ) dmType = 5;   // dummy user support: SCK == -1 --means--> PDM microphone
       #endif
+
+      // lamp fork：AUD_DET 插拔检测 —— 建源之前先按当前插拔状态定 dmType，
+      // 避免「先建错源、再热切一次」的开机空转。引脚只做 INPUT：板上已有
+      // R13 100k 外部上拉，别开内部上/下拉。电容 C20 上电即稳，可立即读。
+      if (jackSwitchActive()) {
+        if (PinManager::allocatePin(jackDetectPin, false, PinOwner::UM_Audioreactive)) {
+          pinMode(jackDetectPin, INPUT);
+          jackInserted = (digitalRead(jackDetectPin) == LOW);
+          dmType = jackInserted ? 0 : 1;
+          DEBUGSR_PRINTF("AR: jack detect on GPIO%d - %s -> dmType %d\n", jackDetectPin, jackInserted ? "inserted" : "empty", dmType);
+        } else {
+          DEBUGSR_PRINTF("AR: jack detect pin %d allocation failed - auto switching disabled\n", jackDetectPin);
+          jackDetectPin = -1;
+        }
+      }
 
       switch (dmType) {
       #if defined(CONFIG_IDF_TARGET_ESP32S3)
@@ -1544,6 +1640,9 @@ class AudioReactive : public Usermod {
         lastUMRun = millis();            // update time keeping
         return;
       }
+#ifdef ARDUINO_ARCH_ESP32
+      handleJackDetect();               // lamp fork：3.5mm 插拔 → 自动切换 analog/I2S
+#endif
       // We cannot wait indefinitely before processing audio data
       if (strip.isUpdating() && (millis() - lastUMRun < 2)) return;   // be nice, but not too nice
 
@@ -1874,6 +1973,12 @@ class AudioReactive : public Usermod {
           }
         }
 
+        // lamp fork：AUD_DET 插拔状态（自动切源的观测口）
+        if (jackDetectPin >= 0) {
+          infoArr = user.createNestedArray(F("Line-In Jack"));
+          infoArr.add(jackInserted ? F("inserted") : F("empty"));
+        }
+
         // Sound processing (FFT and input filters)
         infoArr = user.createNestedArray(F("Sound Processing"));
         if (audioSource && (disableSoundProcessing == false)) {
@@ -2040,6 +2145,10 @@ class AudioReactive : public Usermod {
       pinArray.add(i2sckPin);
       pinArray.add(mclkPin);
 
+      // lamp fork：AUD_DET 插拔检测引脚（-1 关闭自动切源）
+      JsonObject jack = top.createNestedObject(FPSTR(_jackDetect));
+      jack["pin"] = jackDetectPin;
+
       JsonObject cfg = top.createNestedObject(FPSTR(_config));
       cfg[F("squelch")] = soundSquelch;
       cfg[F("gain")] = sampleGain;
@@ -2087,6 +2196,7 @@ class AudioReactive : public Usermod {
       auto oldI2swsPin = i2swsPin;
       auto oldI2SckPin = i2sckPin;
       auto oldI2SmclkPin = mclkPin;
+      auto oldJackDetectPin = jackDetectPin;
     #endif
 
       configComplete &= getJsonValue(top[FPSTR(_enabled)], enabled);
@@ -2114,6 +2224,8 @@ class AudioReactive : public Usermod {
       configComplete &= getJsonValue(top[FPSTR(_digitalmic)]["pin"][2], i2sckPin);
       configComplete &= getJsonValue(top[FPSTR(_digitalmic)]["pin"][3], mclkPin);
 
+      configComplete &= getJsonValue(top[FPSTR(_jackDetect)]["pin"], jackDetectPin);  // lamp fork
+
       configComplete &= getJsonValue(top[FPSTR(_config)][F("squelch")], soundSquelch);
       configComplete &= getJsonValue(top[FPSTR(_config)][F("gain")],    sampleGain);
       configComplete &= getJsonValue(top[FPSTR(_config)][F("AGC")],     soundAgc);
@@ -2133,12 +2245,27 @@ class AudioReactive : public Usermod {
         if ((addPalettes && !oldAddPalettes && enabled) || (addPalettes && !oldEnabled && enabled)) createAudioPalettes();
 	    #ifdef ARDUINO_ARCH_ESP32
         // notify user when a reboot is necessary
-          if ((audioSource != nullptr) && (oldDMType != dmType)) errorFlag = ERR_REBOOT_NEEDED;  // changing mic type requires reboot
+          // lamp fork：jackSwitchActive() 时 0↔1 由热切换收敛，不报「需重启」虚警
+          if ((audioSource != nullptr) && (oldDMType != dmType) && !jackSwitchActive()) errorFlag = ERR_REBOOT_NEEDED;  // changing mic type requires reboot
           if (   (audioSource != nullptr) && (enabled==true)
               && ((oldI2SsdPin != i2ssdPin) || (oldI2swsPin != i2swsPin) || (oldI2SckPin != i2sckPin)) ) errorFlag = ERR_REBOOT_NEEDED;  // changing mic pins requires reboot
           if ((audioSource != nullptr) && (oldI2SmclkPin != mclkPin)) errorFlag = ERR_REBOOT_NEEDED;  // changing MCLK pin requires reboot
-          if ((oldDMType != dmType) && (oldDMType == 0)) errorFlag = ERR_POWEROFF_NEEDED;  // changing from analog mic requires power cycle
-          if ((oldDMType != dmType) && (dmType == 0)) errorFlag = ERR_POWEROFF_NEEDED;  // changing to analog mic requires power cycle
+          // lamp fork：AUD_DET 引脚运行时换脚 —— 释放旧脚、立刻启用新脚（无需重启）。
+          // 引脚被占（含本 usermod 的 I2S/ADC 脚）则关闭功能，与 setup() 同策略。
+          if (oldJackDetectPin != jackDetectPin) {
+            if (oldJackDetectPin >= 0) PinManager::deallocatePin(oldJackDetectPin, PinOwner::UM_Audioreactive);
+            if (jackDetectPin >= 0) {
+              if (PinManager::allocatePin(jackDetectPin, false, PinOwner::UM_Audioreactive)) {
+                pinMode(jackDetectPin, INPUT);
+                jackInserted = (digitalRead(jackDetectPin) == LOW);
+                jackChangeStart = 0;
+              } else {
+                jackDetectPin = -1;
+              }
+            }
+          }
+          if ((oldDMType != dmType) && (oldDMType == 0) && !jackSwitchActive()) errorFlag = ERR_POWEROFF_NEEDED;  // changing from analog mic requires power cycle
+          if ((oldDMType != dmType) && (dmType == 0) && !jackSwitchActive()) errorFlag = ERR_POWEROFF_NEEDED;  // changing to analog mic requires power cycle
         #endif
       } // else setup() will create palettes
       return configComplete;
@@ -2197,6 +2324,7 @@ class AudioReactive : public Usermod {
       uiScript.print(F("addInfo(uxp,0,'<i>sd/data/dout</i>','I2S SD');"));
       uiScript.print(F("addInfo(uxp,1,'<i>ws/clk/lrck</i>','I2S WS');"));
       uiScript.print(F("addInfo(uxp,2,'<i>sck/bclk</i>','I2S SCK');"));
+      uiScript.print(F("addInfo(ux+':jack-detect:pin',0,'<i>TRS detect: low=analog line-in, high=I2S mic; -1 disables</i>','AUD_DET');"));  // lamp fork
       #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
         uiScript.print(F("addInfo(uxp,3,'<i>only use -1, 0, 1 or 3</i>','I2S MCLK');"));
       #else
@@ -2322,6 +2450,7 @@ const char AudioReactive::_inputLvl[]   PROGMEM = "inputLevel";
 const char AudioReactive::_analogmic[]  PROGMEM = "analogmic";  // lamp fork：S3 也要
 #endif
 const char AudioReactive::_digitalmic[] PROGMEM = "digitalmic";
+const char AudioReactive::_jackDetect[] PROGMEM = "jack-detect";  // lamp fork：AUD_DET 插拔检测
 const char AudioReactive::_addPalettes[]          PROGMEM = "add-palettes";
 const char AudioReactive::_palName0[]              PROGMEM = "Ratio";
 const char AudioReactive::_palName1[]              PROGMEM = "Hue";
