@@ -71,3 +71,33 @@ You can use the following additional flags in your `build_flags`
 
 * 2022-06 Ported from [soundreactive WLED](https://github.com/atuline/WLED) - by @blazoncek (AKA Blaz Kristan) and the [SR-WLED team](https://github.com/atuline/WLED/wiki#sound-reactive-wled-fork-team).
 * 2022-11 Updated to align with "[MoonModules/WLED](https://amg.wled.me)" audioreactive usermod - by @softhack007 (AKA Frank M&ouml;hle).
+
+## Lamp fork additions
+
+### ESP32-S3 analog line-in
+
+上游 V5 的 `AdcContinuousSource`（`lib/wled_ADCmanager`，IDF 新的 `adc_continuous` API）
+在 S3 上提供模拟输入：`digitalmic.type = 0` 即模拟线路输入，引脚取 `analogmic.pin`
+（仅限 ADC1 引脚）。上游只在 IDF ≥ 5.5 启用；本 fork 因 esp-matter 钉在 IDF 5.4.1，
+把门槛降到 5.4（见 lamp-v5 的门槛补丁提交）。本 fork 早先用 IDF 4.4 legacy
+`adc_digi_*` 自己实现的 `ADCS3Source` 已由它取代 —— legacy ADC 驱动在 V5 下会 bootloop。
+
+### 3.5mm 插拔检测自动切源（`jack-detect`）
+
+台灯扩展板的 TRS 插座带插拔检测（AUD_DET：板上 100k 上拉 + 100nF 去抖，
+未插 = 高电平，插入 = 低电平）。配置 `jack-detect.pin`（build flag
+`-D SR_JACK_DETECT_PIN=x`，UI 里 `AudioReactive → jack-detect → pin`）后：
+
+* 插入 3.5mm → 运行时热切换到模拟线路输入（type 0，无需重启）；
+* 拔出 → 热切换回 I2S 数字麦（type 1）。拔出后模拟输入端悬空成天线，会拾取
+  WS2812 PWM 串扰（实测 peak 53~60%），所以不能停在 analog；
+* 软件 200ms 确认去抖；切换用 `onUpdateBegin()` 的挂起/恢复路径（与 OTA、
+  UI 开关 usermod 同一条已验证路径），FFT task 安全暂停后重建音源；
+* 检测引脚生效期间，音源在 0/1 之间由插拔状态收敛——Sound Settings 里手动
+  选 0/1 会被拉回物理状态；选其它类型（ES7243 等）则自动切换退出接管；
+  把 `jack-detect.pin` 设为 -1 可彻底关闭；
+* 只改运行态、不写 flash（插拔不磨损配置区）；`/json/info` 的
+  `u.["Line-In Jack"]` 报 `inserted`/`empty`，`u.["Audio Source"]` 在
+  `ADC analog` / `I2S digital` 间相应变化；
+* 仅 ESP32-S3 启用（经典 ESP32 的 I2S-ADC 模式卸载不干净，上游注释明确
+  换 analog 需断电，故不做运行时切换）。
