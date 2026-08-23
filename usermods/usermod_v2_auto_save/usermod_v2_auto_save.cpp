@@ -62,6 +62,7 @@ class AutoSaveUsermod : public Usermod {
     uint8_t knownEffectSpeed = 0;
     uint8_t knownEffectIntensity = 0;
     uint8_t knownMode = 0;
+    uint32_t knownColor = 0;   // lamp fork：主段第一色 —— 上游只盯亮度/速度/强度/模式/调色板，纯换色不触发自动保存
     uint8_t knownPalette = 0;
 
     #ifdef USERMOD_FOUR_LINE_DISPLAY
@@ -149,6 +150,10 @@ class AutoSaveUsermod : public Usermod {
         autoSaveAfter = wouldAutoSaveAfter;
       } else if (knownPalette != currentPalette) {
         knownPalette = currentPalette;
+        autoSaveAfter = wouldAutoSaveAfter;
+      } else if (knownColor != strip.getMainSegment().colors[0]) {
+        // lamp fork：静态单色换色是本灯最常见的操作，上游漏了它
+        knownColor = strip.getMainSegment().colors[0];
         autoSaveAfter = wouldAutoSaveAfter;
       }
 
