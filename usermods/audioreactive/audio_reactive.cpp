@@ -1392,12 +1392,18 @@ class AudioReactive : public Usermod {
       #endif
 
       switch (dmType) {
-      #if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3)
+      #if defined(CONFIG_IDF_TARGET_ESP32S3)
+        case 0:  // lamp fork：S3 模拟线路输入（adc_digi DMA，见 ADCS3Source）
+          DEBUGSR_PRINTLN(F("AR: S3 ADC line-in (adc_digi DMA)."));
+          audioSource = new ADCS3Source(SAMPLE_RATE, BLOCK_SIZE);
+          delay(100);
+          if (audioSource) audioSource->initialize(audioPin);
+          break;
+      #endif
+      #if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
         // stub cases for not-yet-supported I2S modes on other ESP32 chips
         case 0:  //ADC analog
-        #if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
         case 5:  //PDM Microphone
-        #endif
       #endif
         case 1:
           DEBUGSR_PRINT(F("AR: Generic I2S Microphone - ")); DEBUGSR_PRINTLN(F(I2S_MIC_CHANNEL_TEXT));

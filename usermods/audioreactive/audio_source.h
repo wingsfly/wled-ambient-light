@@ -571,6 +571,107 @@ class ES8388Source : public I2SSource {
 #endif
 #endif
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+// ── lamp fork：ESP32-S3 的模拟线路输入 ──
+//
+// S3 没有「ADC over I2S」外设（上游 analog 因此在 S3 上是 stub），
+// 但 S3 的 ADC 自带 DMA 连续采样（IDF 4.4 的 adc_digi_* API）。
+// 本类用它实现 AudioSource：GPIO4/ADC1_CH3、22050Hz、TYPE2 输出，
+// getSamples() 阻塞读 DMA —— 与 I2SSource 的节流语义一致（FFT task
+// 每 BLOCK_SIZE/SAMPLE_RATE ≈ 23ms 醒一次）。
+// 板上前端：交流耦合 + 1.65V 中点偏置（实测 1.62V），12bit 中心
+// ≈2048；残余直流由 SR 的 useMicFilter 处理。
+#include "driver/adc.h"
+
+class ADCS3Source : public AudioSource {
+  public:
+    ADCS3Source(SRate_t sampleRate, int blockSize, float sampleScale = 1.0f) :
+      AudioSource(sampleRate, blockSize, sampleScale) {}
+
+    void initialize(int8_t audioPin = I2S_PIN_NO_CHANGE, int8_t = I2S_PIN_NO_CHANGE,
+                    int8_t = I2S_PIN_NO_CHANGE, int8_t = I2S_PIN_NO_CHANGE) override {
+      _initialized = false;
+      int8_t ch = digitalPinToAnalogChannel(audioPin);
+      if (ch < 0 || ch > 9) {   // 只支持 ADC1（DMA 单元 1）
+        DEBUGSR_PRINTF("ADCS3: pin %d is not on ADC1\n", audioPin);
+        return;
+      }
+      _channel = (uint8_t)ch;
+
+      adc_digi_init_config_t init_cfg = {};
+      init_cfg.max_store_buf_size = 4096;
+      init_cfg.conv_num_each_intr = 256;
+      init_cfg.adc1_chan_mask = 1u << _channel;
+      init_cfg.adc2_chan_mask = 0;
+      if (adc_digi_initialize(&init_cfg) != ESP_OK) {
+        DEBUGSR_PRINTLN(F("ADCS3: adc_digi_initialize failed"));
+        return;
+      }
+
+      adc_digi_pattern_config_t pattern = {};
+      pattern.atten     = ADC_ATTEN_DB_11;   // 0~3.3V 满量程，匹配 1.65V 偏置
+      pattern.channel   = _channel;
+      pattern.unit      = 0;                 // ADC1
+      pattern.bit_width = 12;
+
+      adc_digi_configuration_t dig_cfg = {};
+      dig_cfg.conv_limit_en  = false;        // S3 必须 false（限次是 ESP32 经典款的事）
+      dig_cfg.conv_limit_num = 250;
+      dig_cfg.pattern_num    = 1;
+      dig_cfg.adc_pattern    = &pattern;
+      dig_cfg.sample_freq_hz = _sampleRate;
+      dig_cfg.conv_mode      = ADC_CONV_SINGLE_UNIT_1;
+      dig_cfg.format         = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
+      if (adc_digi_controller_configure(&dig_cfg) != ESP_OK) {
+        DEBUGSR_PRINTLN(F("ADCS3: controller_configure failed"));
+        adc_digi_deinitialize();
+        return;
+      }
+      if (adc_digi_start() != ESP_OK) {
+        DEBUGSR_PRINTLN(F("ADCS3: adc_digi_start failed"));
+        adc_digi_deinitialize();
+        return;
+      }
+      _initialized = true;
+    }
+
+    void deinitialize() override {
+      if (_initialized) {
+        adc_digi_stop();
+        adc_digi_deinitialize();
+      }
+      _initialized = false;
+    }
+
+    void getSamples(FFTsampleType *buffer, uint16_t num_samples) override {
+      if (!_initialized) { for (uint16_t i = 0; i < num_samples; i++) buffer[i] = 0; return; }
+      uint16_t got = 0;
+      uint8_t raw[256 * sizeof(adc_digi_output_data_t)];
+      // 最多等两个块的时间：读不满说明 DMA 停摆，补零返回而不是卡死 FFT task
+      uint32_t deadline = millis() + (2000UL * num_samples) / _sampleRate + 30;
+      while (got < num_samples && (int32_t)(deadline - millis()) > 0) {
+        uint32_t want = (uint32_t)(num_samples - got) * sizeof(adc_digi_output_data_t);
+        if (want > sizeof(raw)) want = sizeof(raw);
+        uint32_t rd = 0;
+        if (adc_digi_read_bytes(raw, want, &rd, 25) != ESP_OK) continue;
+        for (uint32_t i = 0; i + sizeof(adc_digi_output_data_t) <= rd && got < num_samples;
+             i += sizeof(adc_digi_output_data_t)) {
+          adc_digi_output_data_t *d = (adc_digi_output_data_t *)(raw + i);
+          if (d->type2.channel != _channel) continue;   // 保险：只收本通道
+          // 12bit 中心化 → 对齐 int16 满幅（×16），偏置残差交给 useMicFilter
+          buffer[got++] = (FFTsampleType)(((int32_t)d->type2.data - 2048) * 16) * _sampleScale;
+        }
+      }
+      while (got < num_samples) buffer[got++] = 0;
+    }
+
+    AudioSourceType getType(void) override { return Type_I2SAdc; }
+
+  private:
+    uint8_t _channel = 3;
+};
+#endif
+
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
 // ADC over I2S is only availeable in "classic" ESP32
 
