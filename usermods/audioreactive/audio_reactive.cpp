@@ -213,6 +213,12 @@ static void runMicFilter(uint16_t numSamples, FFTsampleType *sampleBuffer);
 static void postProcessFFTResults(bool noiseGateOpen, int numberOfChannels); // post-processing and post-amp of GEQ channels
 
 static TaskHandle_t FFT_Task = nullptr;
+// lamp fork：FFT task 每回到循环顶部就 +1。用于「安全停靠」握手：置
+// disableSoundProcessing 后等它变化，即可确认 task 已离开 getSamples()
+// （驱动内部），此后它只会停在 vTaskDelayUntil —— 挂起/卸驱动才安全。
+// 只 delay(25) 对 I2S（~23ms/块）勉强够，对 ADCS3Source（最坏 ~76ms 的
+// 读循环）必然不够：suspend 冻在 adc_digi 里再 deinit 就是 use-after-free。
+static volatile uint32_t fftTaskLoopCount = 0;
 
 // Table of multiplication factors so that we can even out the frequency response.
 static float fftResultPink[NUM_GEQ_CHANNELS] = { 1.70f, 1.71f, 1.73f, 1.78f, 1.68f, 1.56f, 1.55f, 1.63f, 1.79f, 1.62f, 1.80f, 2.06f, 2.47f, 3.35f, 6.83f, 9.55f };
@@ -349,6 +355,8 @@ void FFTcode(void * parameter)
   for(;;) {
     delay(1);           // DO NOT DELETE THIS LINE! It is needed to give the IDLE(0) task enough time and to keep the watchdog happy.
                         // taskYIELD(), yield(), vTaskDelay() and esp_task_wdt_feed() didn't seem to work.
+    fftTaskLoopCount++; // lamp fork：停靠握手标记 —— 位于 getSamples() 之外、
+                        // disable 检查之前：计数变化 ⇒ 已退出上一轮采样，且本轮会看到标志
 
     // Don't run FFT computing code if we're in Receive mode or in realtime mode
     if (disableSoundProcessing || (audioSyncEnabled & 0x02)) {
@@ -1363,14 +1371,35 @@ class AudioReactive : public Usermod {
     #endif
     }
 
-    // 运行时热切换音源，无需重启。挂起/恢复复用 onUpdateBegin —— 它就是
-    // OTA 与「UI 开关本 usermod」共用的那条已验证路径：置 disableSoundProcessing
-    // 后 delay(25) 等 FFT task 退出 getSamples()，再 vTaskSuspend，避免在
-    // i2s_read 阻塞中卸载驱动。只改运行态 dmType，不写 flash（插拔不磨损配置区）。
+    // 等 FFT task「安全停靠」：前提是调用前已置 disableSoundProcessing=true。
+    // fftTaskLoopCount 变化 ⇒ task 已退出上一轮 getSamples()（离开驱动内部），
+    // 且本轮循环顶会看到标志、只会停在 vTaskDelayUntil —— 之后挂起/卸驱动才安全。
+    // 超时（task 卡在驱动里没回来）则报 false，调用方必须放弃本次操作。
+    bool waitFFTTaskParked(unsigned long timeoutMs) {
+      if (!FFT_Task) return true;
+      const uint32_t c0 = fftTaskLoopCount;
+      const unsigned long t0 = millis();
+      while (fftTaskLoopCount == c0) {
+        if (millis() - t0 >= timeoutMs) return false;
+        delay(5);
+      }
+      return true;
+    }
+
+    // 运行时热切换音源，无需重启。置 disableSoundProcessing 后先做停靠握手
+    // （ADCS3Source 的读循环最坏 ~76ms，onUpdateBegin 里那个 delay(25) 不够——
+    // suspend 冻在 adc_digi 里再 deinit 就是 use-after-free，实板表现为拔出后
+    // panic 重启），确认 task 停靠再走 onUpdateBegin 的挂起/恢复路径。
+    // 只改运行态 dmType，不写 flash（插拔不磨损配置区）。
     void switchAudioSourceForJack(uint8_t newType) {
       if ((dmType == newType) && audioSource && audioSource->isInitialized()) return;
 
       DEBUGSR_PRINTF("AR: jack detect - switching audio source %d -> %d\n", dmType, newType);
+      disableSoundProcessing = true;    // 亮牌：FFT task 本轮循环顶之后不再进 getSamples
+      if (!waitFFTTaskParked(300)) {    // ADCS3 最坏 ~76ms + FFT ~5ms，300ms 裕量充足
+        DEBUGSR_PRINTLN(F("AR: jack switch aborted - FFT task busy"));
+        return;                         // 放弃本次；收敛逻辑下轮 loop() 自动重试
+      }
       onUpdateBegin(true);              // 挂起 FFT task，复位音频状态
       if (audioSource) {
         audioSource->deinitialize();    // I2S: 卸驱动+还引脚；ADC: 停 adc_digi
@@ -1811,6 +1840,9 @@ class AudioReactive : public Usermod {
       autoResetPeak();
 
       if (init && FFT_Task) {
+        // lamp fork：先做停靠握手 —— ADCS3Source 的读循环最坏 ~76ms，光靠下面的
+        // delay(25) 不够（suspend 会冻在 adc_digi 驱动里）。超时则退回原行为兜底。
+        if (!waitFFTTaskParked(300)) DEBUGSR_PRINTLN(F("AR: FFT task not parked before suspend"));
         delay(25);                // give some time for I2S driver to finish sampling before we suspend it
         vTaskSuspend(FFT_Task);   // update is about to begin, disable task to prevent crash
         if (udpSyncConnected) {   // close UDP sync connection (if open)
