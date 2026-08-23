@@ -86,11 +86,13 @@ ADC DMA 连续采样（`adc_digi_*`）实现了 `ADCS3Source`，`digitalmic.type
 未插 = 高电平，插入 = 低电平）。配置 `jack-detect.pin`（build flag
 `-D SR_JACK_DETECT_PIN=x`，UI 里 `AudioReactive → jack-detect → pin`）后：
 
-* 插入 3.5mm → 运行时热切换到模拟线路输入（type 0，无需重启）；
-* 拔出 → 热切换回 I2S 数字麦（type 1）。拔出后模拟输入端悬空成天线，会拾取
+* 插入 3.5mm → 切换到模拟线路输入（type 0）；
+* 拔出 → 切换回 I2S 数字麦（type 1）。拔出后模拟输入端悬空成天线，会拾取
   WS2812 PWM 串扰（实测 peak 53~60%），所以不能停在 analog；
-* 软件 200ms 确认去抖；切换用 `onUpdateBegin()` 的挂起/恢复路径（与 OTA、
-  UI 开关 usermod 同一条已验证路径），FFT task 安全暂停后重建音源；
+* 软件 200ms 确认去抖；先尝试运行时热切换：停靠握手（等 FFT task 退出驱动
+  读取）→ `onUpdateBegin()` 挂起 → 重建音源 → **直读驱动验流**。流活则零重启
+  完成；流死（实测 ADC→I2S 方向存在 install 无错但 DMA 不供数的死流）则
+  `doReboot` 自动重启兜底 —— boot 按 GPIO15 重建正确的源，实测始终可靠；
 * 检测引脚生效期间，音源在 0/1 之间由插拔状态收敛——Sound Settings 里手动
   选 0/1 会被拉回物理状态；选其它类型（ES7243 等）则自动切换退出接管；
   把 `jack-detect.pin` 设为 -1 可彻底关闭；

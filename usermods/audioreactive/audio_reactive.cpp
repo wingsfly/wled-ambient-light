@@ -1387,6 +1387,30 @@ class AudioReactive : public Usermod {
       return true;
     }
 
+    // 重建后主动验流：趁 FFT task 仍挂起（无并发读者）直读驱动，确认数据真在来。
+    // 实测存在「install 全程无错但 DMA 不供数」的死流（ADC→I2S 方向，periph
+    // reset 也救不回，根因疑在 IDF4.4 legacy i2s 与 adc_digi 的 GDMA 交互）。
+    // 一次 rd>0 即活；窗口给足 I2S 麦时钟重启后的出数时间（<100ms 典型）。
+    bool probeAudioStream(uint8_t type, unsigned long windowMs) {
+      uint8_t buf[256];
+      const unsigned long t0 = millis();
+      while ((long)(millis() - t0) < (long)windowMs) {
+    #if defined(CONFIG_IDF_TARGET_ESP32S3)
+        if (type == 0) {
+          uint32_t rd = 0;
+          adc_digi_read_bytes(buf, sizeof(buf), &rd, 25);
+          if (rd > 0) return true;
+        } else
+    #endif
+        {
+          size_t rd = 0;
+          i2s_read(I2S_NUM_0, buf, sizeof(buf), &rd, pdMS_TO_TICKS(50));
+          if (rd > 0) return true;
+        }
+      }
+      return false;
+    }
+
     // 运行时热切换音源，无需重启。置 disableSoundProcessing 后先做停靠握手
     // （ADCS3Source 的读循环最坏 ~76ms，onUpdateBegin 里那个 delay(25) 不够——
     // suspend 冻在 adc_digi 里再 deinit 就是 use-after-free，实板表现为拔出后
@@ -1429,9 +1453,16 @@ class AudioReactive : public Usermod {
         if (audioSource) audioSource->initialize(i2swsPin, i2ssdPin, i2sckPin);
       }
     #endif
+      // 验流：热切换的成败以「数据流真的活了」为准，init 无错不算数。
+      const bool streamAlive = audioSource && audioSource->isInitialized()
+                               && probeAudioStream(newType, 400);
       onUpdateBegin(false);             // 恢复 FFT task 与声音处理
-      if (!audioSource || !audioSource->isInitialized()) {
-        DEBUGSR_PRINTLN(F("AR: jack detect - new audio source failed to initialize"));
+      if (!streamAlive) {
+        // 热切失败（源没起来 / 流是死的）：唯一可靠的恢复是重启 —— boot 路径
+        // 两种源都实测可靠，且 setup() 的插拔预采样按 GPIO15 重建正确的源，
+        // 无需先保存配置。这就是预案里的 fallback：检测到变化 → 自动重启。
+        DEBUGSR_PRINTLN(F("AR: jack switch - stream dead after rebuild, rebooting"));
+        doReboot = true;
       }
     }
 
