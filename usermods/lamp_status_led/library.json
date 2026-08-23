@@ -1,0 +1,4 @@
+{
+  "name": "lamp_status_led",
+  "build": { "libArchive": false }
+}
