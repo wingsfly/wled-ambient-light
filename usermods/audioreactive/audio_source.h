@@ -322,7 +322,11 @@ class I2SSource : public AudioSource {
         size_t bytes_read = 0;        /* Counter variable to check if we actually got enough data */
         I2S_datatype newSamples[num_samples]; /* Intermediary sample storage */
 
-        err = i2s_read(I2S_NUM_0, (void *)newSamples, sizeof(newSamples), &bytes_read, portMAX_DELAY);
+        // lamp fork：portMAX_DELAY 改有限超时 —— I2S 数据流若死（实测：ADC→I2S
+        // 热切后 RX 曾不供数），portMAX_DELAY 会把 FFT task 永久冻在这里，音频链
+        // 整体瘫痪且停靠握手失效（无法再切换自愈）。正常一块 ~23ms，100ms 只在
+        // 真异常时触发，走下方 partial-read 路径返回。
+        err = i2s_read(I2S_NUM_0, (void *)newSamples, sizeof(newSamples), &bytes_read, pdMS_TO_TICKS(100));
         if (err != ESP_OK) {
           DEBUGSR_PRINTF("Failed to get samples: %d\n", err);
           return;

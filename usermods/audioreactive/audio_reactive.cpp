@@ -814,6 +814,7 @@ class AudioReactive : public Usermod {
     #endif
     bool jackInserted = false;                 // 去抖后的插入状态
     unsigned long jackChangeStart = 0;         // 电平与去抖状态首次不一致的时刻；0=一致
+    unsigned long jackSwitchRetryAfter = 0;    // 切换 abort（FFT task 未停靠）后的冷却截止
     static constexpr unsigned long JACK_DEBOUNCE_MS = 200;  // C20 已硬件去抖，软件只做确认
 #endif
 
@@ -1398,7 +1399,8 @@ class AudioReactive : public Usermod {
       disableSoundProcessing = true;    // 亮牌：FFT task 本轮循环顶之后不再进 getSamples
       if (!waitFFTTaskParked(300)) {    // ADCS3 最坏 ~76ms + FFT ~5ms，300ms 裕量充足
         DEBUGSR_PRINTLN(F("AR: jack switch aborted - FFT task busy"));
-        return;                         // 放弃本次；收敛逻辑下轮 loop() 自动重试
+        jackSwitchRetryAfter = millis() + 5000;  // 冷却 5s：task 真卡死时别每轮拖 300ms
+        return;                         // 放弃本次；冷却后收敛逻辑自动重试
       }
       onUpdateBegin(true);              // 挂起 FFT task，复位音频状态
       if (audioSource) {
@@ -1406,6 +1408,14 @@ class AudioReactive : public Usermod {
         delete audioSource;
         audioSource = nullptr;
       }
+      // 对齐 setup() 的外设硬复位。实测缺这步时 ADC→I2S 重建后 RX 不供数据、
+      // i2s_read 永久阻塞（adc_digi 生命周期的残留影响 I2S DMA）——驱动 install
+      // 成功但流是死的。setup() 每次 boot 都做这三步，运行时重建同样要做。
+      i2s_driver_uninstall(I2S_NUM_0);  // 防残留；未安装时报错属预期，忽略
+      #if !defined(CONFIG_IDF_TARGET_ESP32C3)
+      periph_module_reset(PERIPH_I2S0_MODULE);
+      #endif
+      delay(100);
       dmType = newType;
 
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
@@ -1440,7 +1450,8 @@ class AudioReactive : public Usermod {
       }
       jackChangeStart = 0;
       const uint8_t desired = jackInserted ? 0 : 1;
-      if ((desired != dmType) && !updateIsRunning) switchAudioSourceForJack(desired);
+      if ((desired != dmType) && !updateIsRunning
+          && ((long)(millis() - jackSwitchRetryAfter) >= 0)) switchAudioSourceForJack(desired);
     }
 #endif
 
@@ -2009,6 +2020,9 @@ class AudioReactive : public Usermod {
         if (jackDetectPin >= 0) {
           infoArr = user.createNestedArray(F("Line-In Jack"));
           infoArr.add(jackInserted ? F("inserted") : F("empty"));
+          // FFT task 活性：两次刷新间数字在涨 = task 未卡死（i2s_read/adc 流正常）
+          infoArr = user.createNestedArray(F("FFT Cycle"));
+          infoArr.add((uint32_t)fftTaskLoopCount);
         }
 
         // Sound processing (FFT and input filters)
