@@ -879,8 +879,8 @@ class AudioReactive : public Usermod {
     static const char _dynamics[];
     static const char _frequency[];
     static const char _inputLvl[];
-#if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
-    static const char _analogmic[];
+#if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+    static const char _analogmic[];  // lamp fork：S3 也要（ADCS3Source）
 #endif
     static const char _digitalmic[];
     static const char _addPalettes[];
@@ -2318,8 +2318,8 @@ const char AudioReactive::_config[]     PROGMEM = "config";
 const char AudioReactive::_dynamics[]   PROGMEM = "dynamics";
 const char AudioReactive::_frequency[]  PROGMEM = "frequency";
 const char AudioReactive::_inputLvl[]   PROGMEM = "inputLevel";
-#if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
-const char AudioReactive::_analogmic[]  PROGMEM = "analogmic";
+#if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+const char AudioReactive::_analogmic[]  PROGMEM = "analogmic";  // lamp fork：S3 也要
 #endif
 const char AudioReactive::_digitalmic[] PROGMEM = "digitalmic";
 const char AudioReactive::_addPalettes[]          PROGMEM = "add-palettes";
