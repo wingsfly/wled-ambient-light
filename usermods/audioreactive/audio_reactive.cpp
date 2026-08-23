@@ -2026,7 +2026,8 @@ class AudioReactive : public Usermod {
       top[FPSTR(_addPalettes)] = addPalettes;
 
 #ifdef ARDUINO_ARCH_ESP32
-    #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
+    #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+      // lamp fork：S3 从排除名单拿掉 —— ADCS3Source 落地后 S3 支持模拟输入
       JsonObject amic = top.createNestedObject(FPSTR(_analogmic));
       amic["pin"] = audioPin;
     #endif
@@ -2092,14 +2093,16 @@ class AudioReactive : public Usermod {
       configComplete &= getJsonValue(top[FPSTR(_addPalettes)], addPalettes);
 
 #ifdef ARDUINO_ARCH_ESP32
-    #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S3)
+    #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+      // lamp fork：S3 允许 analogmic.pin（ADCS3Source）
       configComplete &= getJsonValue(top[FPSTR(_analogmic)]["pin"], audioPin);
     #else
       audioPin = -1; // MCU does not support analog mic
     #endif
 
       configComplete &= getJsonValue(top[FPSTR(_digitalmic)]["type"],   dmType);
-    #if  defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3)
+    #if  defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
+      // lamp fork：S3 的 dmType=0 合法（走 ADCS3Source），钳位只留给 S2/C3
       if (dmType == 0) dmType = SR_DMTYPE;   // MCU does not support analog
       #if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32C3)
       if (dmType == 5) dmType = SR_DMTYPE;   // MCU does not support PDM
