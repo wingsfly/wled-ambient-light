@@ -91,8 +91,10 @@ ADC DMA 连续采样（`adc_digi_*`）实现了 `ADCS3Source`，`digitalmic.type
   WS2812 PWM 串扰（实测 peak 53~60%），所以不能停在 analog；
 * 软件 200ms 确认去抖；先尝试运行时热切换：停靠握手（等 FFT task 退出驱动
   读取）→ `onUpdateBegin()` 挂起 → 重建音源 → **直读驱动验流**。流活则零重启
-  完成；流死（实测 ADC→I2S 方向存在 install 无错但 DMA 不供数的死流）则
-  `doReboot` 自动重启兜底 —— boot 按 GPIO15 重建正确的源，实测始终可靠；
+  完成；I2S 验流不仅检查 DMA 返回字节，还要求观察窗口后半持续出现内容变化
+  的样本，避免把全零、常量或单块陈旧数据误判为活流。流死（实测 ADC→I2S
+  方向存在 install 无错但 DMA 只吐假数据的死流）则 `doReboot` 自动重启兜底
+  —— boot 按 GPIO15 重建正确的源，实测始终可靠；
 * 检测引脚生效期间，音源在 0/1 之间由插拔状态收敛——Sound Settings 里手动
   选 0/1 会被拉回物理状态；选其它类型（ES7243 等）则自动切换退出接管；
   把 `jack-detect.pin` 设为 -1 可彻底关闭；

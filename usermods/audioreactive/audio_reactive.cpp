@@ -162,6 +162,7 @@ static FFTsampleType* windowFFT = nullptr;
 
 // use audio source class (ESP32 specific)
 #include "audio_source.h"
+#include "audio_stream_probe.h"
 constexpr i2s_port_t I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change !)
 constexpr int BLOCK_SIZE = 128;                  // I2S buffer size (samples)
 
@@ -1390,25 +1391,30 @@ class AudioReactive : public Usermod {
     // 重建后主动验流：趁 FFT task 仍挂起（无并发读者）直读驱动，确认数据真在来。
     // 实测存在「install 全程无错但 DMA 不供数」的死流（ADC→I2S 方向，periph
     // reset 也救不回，根因疑在 IDF4.4 legacy i2s 与 adc_digi 的 GDMA 交互）。
-    // 一次 rd>0 即活；窗口给足 I2S 麦时钟重启后的出数时间（<100ms 典型）。
+    // ADC 只需确认窗口后半仍有数据；I2S 还必须确认样本不是全零/常量，且
+    // 后半段多个块内容持续变化。否则全零死流或一块陈旧 DMA 数据会被误判为活。
     bool probeAudioStream(uint8_t type, unsigned long windowMs) {
       uint8_t buf[256];
       const unsigned long t0 = millis();
+      bool adcFreshLate = false;
+      audio_stream_probe::Window i2sProbe;
       while ((long)(millis() - t0) < (long)windowMs) {
+        const bool late = (millis() - t0) >= (windowMs / 2);
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
         if (type == 0) {
           uint32_t rd = 0;
           adc_digi_read_bytes(buf, sizeof(buf), &rd, 25);
-          if (rd > 0) return true;
+          if (rd > 0 && late) adcFreshLate = true;
         } else
     #endif
         {
           size_t rd = 0;
           i2s_read(I2S_NUM_0, buf, sizeof(buf), &rd, pdMS_TO_TICKS(50));
-          if (rd > 0) return true;
+          i2sProbe.observe(buf, rd, late);
         }
+        delay(5);
       }
-      return false;
+      return type == 0 ? adcFreshLate : i2sProbe.healthy();
     }
 
     // 运行时热切换音源，无需重启。置 disableSoundProcessing 后先做停靠握手
