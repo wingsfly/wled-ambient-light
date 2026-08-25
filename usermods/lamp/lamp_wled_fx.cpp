@@ -133,6 +133,22 @@ struct LampBridge {
 LampBridge bridge;
 Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 
+// 亮度动态型效果（整管近单色相）用位置铺调色板；空间多彩型用色相映射。
+// 第一批里旋律/人声类走回退分支时也近单色相，一并归位置型 —— 第二批
+// chroma/f0 数据到位后，把 KeyWash/ChromaRing 等挪回色相型再审。
+inline bool fxPaletteByPosition(FxId id) {
+  switch (id) {
+    case FX_SPECTRUM_BARS:      // 频段彩虹沿管
+    case FX_SPLIT_BANDS:        // 低/高频两段异色
+    case FX_COLOR_FLOW:         // 色相流动本身多彩
+    case FX_MOOD_GRADIENT:      // 沿管情绪渐变
+    case FX_SLOW_AURORA:        // 三相位极光
+      return false;
+    default:
+      return true;
+  }
+}
+
 // RGB → (hue, sat, val)，8bit 域。lamp 效果的色相语义（频段位置、调性、
 // mood）经 hue 翻译成调色板索引，效果的空间结构与明暗动态原样保留。
 inline void rgb2hsv8(const Rgb &c, uint8_t &h, uint8_t &s, uint8_t &v) {
@@ -161,10 +177,16 @@ void modeLampCommon(FxId id) {
   // 白平衡关掉：WLED 自己有全局色彩处理，别叠两层
   fxRender(id, *st, cfg, bridge.frame, geo, false, bridge.dtMs, fxOut);
   // 96 颗设计幅面 → 当前 segment 长度重采样（seg 恰为 96 时逐颗直映）。
-  // 调色板融合：palette 0 (Default) 保持效果原生配色；选了调色板则把像素
-  // 色相翻译成调色板索引、亮度原样保留 —— 效果的形状与动态不变，颜色风格
-  // 交给调色板。低饱和像素（白闪、灰）不映射，冲击感的白不被染色。
+  // 调色板融合：palette 0 (Default) 保持效果原生配色。选了调色板时分两型：
+  //  · 空间多彩型（色相沿管本来就有行程）：hue → 调色板索引，形状与配色
+  //    行程都保留；
+  //  · 亮度动态型（整管近单色相，靠明暗表达，如 Bar Impact）：hue 映射只会
+  //    取到调色板上一个点（用户实测 Fairy Reef 下恒蓝）——改用像素位置铺开
+  //    调色板（WLED 原生惯例），效果自身 hue 变为滚动偏移，随音色/小节在
+  //    调色板上漂移。
+  // 低饱和像素（白闪、灰）两型都不映射，冲击感的白不被染色。
   const bool usePal = SEGMENT.palette != 0;
+  const bool posMap = fxPaletteByPosition(id);
   unsigned len = SEGLEN;
   for (unsigned i = 0; i < len; i++) {
     const Rgb &c = fxOut[(uint32_t)i * TOTAL_LEDS / len];
@@ -173,7 +195,9 @@ void modeLampCommon(FxId id) {
       rgb2hsv8(c, h, s, v);
       if (v == 0) { SEGMENT.setPixelColor(i, 0); continue; }
       if (s < 40) { SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0)); continue; }
-      SEGMENT.setPixelColor(i, SEGMENT.color_from_palette(h, false, false, 0, v));
+      uint8_t idx = posMap ? (uint8_t)((i * 255u) / (len > 1 ? len - 1 : 1) + h)
+                           : h;
+      SEGMENT.setPixelColor(i, SEGMENT.color_from_palette(idx, false, false, 0, v));
     } else {
       SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0));
     }
