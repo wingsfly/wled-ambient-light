@@ -133,10 +133,10 @@ struct LampBridge {
 LampBridge bridge;
 Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 
-uint16_t modeLampCommon(FxId id) {
+void modeLampCommon(FxId id) {
   bridge.fill(strip.now);
   if (!SEGENV.data) {
-    if (!SEGENV.allocateData(sizeof(FxState))) return FRAMETIME;  // 内存不足：本帧空过
+    if (!SEGENV.allocateData(sizeof(FxState))) return;  // 内存不足：本帧空过
     new (SEGENV.data) FxState();           // 默认成员值靠 placement-new 落位
   }
   FxState *st = reinterpret_cast<FxState*>(SEGENV.data);
@@ -150,12 +150,11 @@ uint16_t modeLampCommon(FxId id) {
     const Rgb &c = fxOut[(uint32_t)i * TOTAL_LEDS / len];
     SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0));
   }
-  return FRAMETIME;
 }
 
 // 23 个包装函数 + 元数据（名字带 ♪ 前缀，特效列表里聚在一起好找）
 #define LAMP_FX(fn, fxid, meta) \
-  static uint16_t fn() { return modeLampCommon(fxid); } \
+  static void fn() { modeLampCommon(fxid); } \
   static const char fn##_data[] PROGMEM = meta;
 
 LAMP_FX(mLampSpectrum,  FX_SPECTRUM_BARS,  "♪ Spectrum Bars@;;!;1v;si=0")
