@@ -68,23 +68,33 @@ def main():
     freqs = np.fft.rfftfreq(BLOCK, 1 / RATE)
     band_idx = [(freqs >= EDGES[i]) & (freqs < EDGES[i + 1]) for i in range(NUM_GEQ)]
     smth = 0.0
-    env = 1000.0                    # 自动标度包络
+    env = 100.0                     # GEQ 自动标度包络
+    vol_env = 0.02                  # 音量 AGC 包络（rms 域）
+    NOISE_GATE = 0.0008             # 绝对静音门（rms）：低于此视为无声，不放大底噪
     last_stat = time.time()
     stat = {"pk": 0, "n": 0}
 
     def process(mono):
-        nonlocal smth, env
-        spec = np.abs(np.fft.rfft(mono * window))
-        bands = np.array([spec[m].max() if m.any() else 0.0 for m in band_idx])
-        env = max(env * 0.999, bands.max(), 200.0)          # 慢衰减自动增益
-        fft8 = np.clip(bands / env * 255 * args.gain, 0, 255).astype(np.uint8)
-        vol = float(np.clip(np.sqrt((mono ** 2).mean()) * 2500 * args.gain, 0, 255))
+        nonlocal smth, env, vol_env
+        rms = float(np.sqrt((mono ** 2).mean()))
+        if rms < NOISE_GATE:
+            # 真静音：直接给零，包络缓慢回落，别让 AGC 把底噪拉满
+            vol, fft8, mp, mag = 0.0, np.zeros(NUM_GEQ, np.uint8), 1.0, 0.0
+        else:
+            spec = np.abs(np.fft.rfft(mono * window))
+            bands = np.array([spec[m].max() if m.any() else 0.0 for m in band_idx])
+            # AGC：包络跟踪近期峰值（快升慢降），任意播放音量都归一到满动态
+            vol_env = max(vol_env * 0.9995, rms * 0.7, NOISE_GATE * 4)
+            env = max(env * 0.999, bands.max() * 0.7, 10.0)
+            vol = float(np.clip(rms / vol_env * 200 * args.gain, 0, 255))
+            fft8 = np.clip(bands / env * 200 * args.gain, 0, 255).astype(np.uint8)
+            mp = float(np.clip(freqs[np.argmax(spec[1:]) + 1], 1, 11025))
+            mag = float(bands.max())
         peak = 1 if vol > smth * 1.6 and vol > 30 else 0
         smth = smth * 0.82 + vol * 0.18
-        mp = float(np.clip(freqs[np.argmax(spec[1:]) + 1], 1, 11025))
         pkt = struct.pack("<6s2sffBB16s2sff", b"00002\0", b"\0\0",
                           vol, smth, peak, 0, fft8.tobytes(), b"\0\0",
-                          float(bands.max()), mp)
+                          mag, mp)
         stat["pk"] = max(stat["pk"], vol); stat["n"] += 1
         # 网络瞬断绝不能杀回调——音频流一停就再也起不来
         try: sock.sendto(pkt, ("239.0.0.1", 11988))
