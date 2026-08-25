@@ -27,6 +27,7 @@
 			<button id="buttonNodes" onclick="toggleNodes()"><i class="icons">&#xe22d;</i><p class="tab-label">Nodes</p></button>
 			<button onclick="window.location.href=getURL('/settings');"><i class="icons">&#xe0a2;</i><p class="tab-label">Config</p></button>
 			<button id="buttonPcm" onclick="togglePcMode(true)"><i class="icons">&#xe23d;</i><p class="tab-label">PC Mode</p></button>
+			<button id="buttonLang" onclick="lampToggleLang()"><i class="icons">&#xe066;</i><p class="tab-label" id="langLabel">中文</p></button>
 		</div>
 		<div id="briwrap">
 			<p class="hd">Brightness</p>
@@ -385,5 +386,67 @@
 <!--  <script src="iro.js"></script> NOTE: iro.js is loaded at the beginning of index.js -->
 <script src="rangetouch.js"></script>
 <script src="index.js"></script>
+<script>
+/* lamp fork：轻量中英切换。字典按「英文原文 → 中文」精确匹配文本节点与
+   title/placeholder 属性；特效/调色板名保留英文（与社区资料对照）。
+   动态重建的 DOM（特效列表、分段卡、预设卡）由 MutationObserver 增量翻译。
+   切回英文直接刷新页面 —— 反向替换容易漏，reload 干净。 */
+(function(){
+var Z={
+"Power":"电源","Timer":"定时","Sync":"同步","Peek":"预览","Info":"信息",
+"Nodes":"节点","Config":"设置","PC Mode":"桌面模式","Brightness":"亮度",
+"Colors":"颜色","Effects":"特效","Segments":"分段","Presets":"预设",
+"Effect mode":"特效模式","Loading...":"加载中...","Loading WLED UI...":"界面加载中...",
+"Search":"搜索","Effect speed":"特效速度","Effect intensity":"特效强度",
+"Custom palettes":"自定义调色板","Red channel":"红色通道","Green channel":"绿色通道",
+"Blue channel":"蓝色通道","Hue":"色相","Saturation":"饱和度","Value/Brightness":"明度",
+"Kelvin/Temperature":"色温","White balance":"白平衡","Hex RGB":"十六进制 RGB",
+"Random":"随机","Freeze":"冻结","Single pixel":"单像素","Select slot":"选择槽位",
+"Toggle labels":"显示/隐藏标签","Uses palette":"使用调色板","Volume":"音量",
+"Frequency":"频率","File editor":"文件编辑器","Custom 1":"自定义 1","Custom 2":"自定义 2",
+"Custom 3":"自定义 3","Check 1":"选项 1","Check 2":"选项 2","Check 3":"选项 3",
+"Add segment":"添加分段","Add":"添加","Apply at boot":"开机时应用","Cancel":"取消",
+"Save":"保存","Save to ID":"保存到 ID","Delete":"删除","Preset":"预设","Preset ":"预设 ",
+"Playlist":"播放列表","Playlist entries":"播放列表条目","Quick load":"快速加载",
+"Transition":"过渡","Duration":"时长","Repeat":"重复","Reverse":"反向","Mirror":"镜像",
+"Grouping":"分组","Spacing":"间隔","Start LED":"起始灯珠","Stop LED":"结束灯珠",
+"Blend mode":"混合模式","Sound sim":"声音模拟","Restore":"恢复","Restore preset":"恢复预设",
+"Test":"测试","None":"无","Unchanged":"保持不变","Include brightness":"包含亮度",
+"Save segment bounds":"保存分段范围","Checked segments only":"仅选中的分段",
+"Copy to clipboard":"复制到剪贴板","Enter name...":"输入名称...","To current":"应用当前状态",
+"Pixels":"像素","Segment name":"分段名称","Preset name":"预设名称"
+};
+var LK="lampLang";
+function tx(t){var s=t.nodeValue,m=s.trim();if(m&&Z[m])t.nodeValue=s.replace(m,Z[m]);}
+function walk(root){
+  if(!root)return;
+  if(root.nodeType===3){tx(root);return;}
+  if(root.nodeType!==1)return;
+  if(root.tagName==="SCRIPT"||root.tagName==="STYLE")return;
+  if(root.title&&Z[root.title])root.title=Z[root.title];
+  var ph=root.getAttribute&&root.getAttribute("placeholder");
+  if(ph&&Z[ph])root.setAttribute("placeholder",Z[ph]);
+  for(var n=root.firstChild;n;n=n.nextSibling)walk(n);
+}
+var obs=null;
+function apply(){
+  walk(document.body);
+  var b=document.getElementById("langLabel");if(b)b.textContent="EN";
+  if(obs)return;
+  obs=new MutationObserver(function(ms){
+    obs.disconnect();
+    for(var i=0;i<ms.length;i++)for(var j=0;j<ms[i].addedNodes.length;j++)walk(ms[i].addedNodes[j]);
+    obs.observe(document.body,{childList:true,subtree:true});
+  });
+  obs.observe(document.body,{childList:true,subtree:true});
+}
+window.lampToggleLang=function(){
+  var zh=localStorage.getItem(LK)!=="en";
+  localStorage.setItem(LK,zh?"en":"zh");
+  if(zh)location.reload();else apply();
+};
+if(localStorage.getItem(LK)!=="en")apply();
+})();
+</script>
 </body>
 </html>
