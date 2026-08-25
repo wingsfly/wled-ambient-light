@@ -172,10 +172,33 @@ void modeLampCommon(FxId id) {
     new (SEGENV.data) FxState();           // 默认成员值靠 placement-new 落位
   }
   FxState *st = reinterpret_cast<FxState*>(SEGENV.data);
-  static const FxConfig cfg;               // 第一批用默认参数
+
+  // ── 滑条接入（对齐原生效果惯例，per-segment）──
+  // Speed → 时间缩放：128 = 设计默认，0 = 2 倍慢，255 = 2 倍快。
+  // 缩放全部时间类参数（runner_tail 是空间比例，不动）。
+  const float tScale = powf(2.0f, (128.0f - SEGMENT.speed) / 128.0f);
+  FxConfig cfg;
+  cfg.decay_beats *= tScale;  cfg.decay_free_ms *= tScale;
+  cfg.flow_beats  *= tScale;  cfg.flow_free_ms  *= tScale;
+  cfg.sect_tau_ms *= tScale;  cfg.trail_tau_ms  *= tScale;
+  cfg.f0_glide_ms *= tScale;  cfg.bloom_beats   *= tScale;
+  cfg.ripple_beats*= tScale;  cfg.drum_tau_ms   *= tScale;
+  cfg.comet_tail_ms *= tScale; cfg.harm_tau_ms  *= tScale;
+  cfg.voc_tau_ms  *= tScale;  cfg.lyric_tau_ms  *= tScale;
+  cfg.tide_ms     *= tScale;  cfg.aurora_ms     *= tScale;
+  // Sensitivity → 音频增益：128 = 1.0×。效果内部 perceptual/clamp 自行封顶。
+  const float sGain = SEGMENT.intensity / 128.0f;
+  AudioFrame f = bridge.frame;             // per-seg 副本（多 seg 不同参数）
+  if (sGain != 1.0f) {
+    for (int i = 0; i < NUM_BANDS; i++) {
+      f.bands[i] *= sGain; f.bands_h[i] *= sGain; f.bands_p[i] *= sGain;
+    }
+    f.rms_fast *= sGain; f.rms_slow *= sGain; f.peak *= sGain;
+  }
+
   static const Geometry geo;               // 两管方向按默认（S1 左、首颗管底）
   // 白平衡关掉：WLED 自己有全局色彩处理，别叠两层
-  fxRender(id, *st, cfg, bridge.frame, geo, false, bridge.dtMs, fxOut);
+  fxRender(id, *st, cfg, f, geo, false, bridge.dtMs, fxOut);
   // 96 颗设计幅面 → 当前 segment 长度重采样（seg 恰为 96 时逐颗直映）。
   // 调色板融合：palette 0 (Default) 保持效果原生配色。选了调色板时分两型：
   //  · 空间多彩型（色相沿管本来就有行程）：hue → 调色板索引，形状与配色
@@ -187,18 +210,26 @@ void modeLampCommon(FxId id) {
   // 低饱和像素（白闪、灰）两型都不映射，冲击感的白不被染色。
   const bool usePal = SEGMENT.palette != 0;
   const bool posMap = fxPaletteByPosition(id);
+  // mirror 兼容：seg 开镜像时 vLength 已折半，只采左管（S1=[0,47]）交引擎
+  // 镜像出右半 —— 对称类效果视觉不变，与原生效果的 mirror 语义统一。
+  const unsigned span = SEGMENT.mirror ? LEDS_PER_TUBE : TOTAL_LEDS;
+  // Palette drift（check1，默认关）：调色板索引叠加极慢时间滚动（≈16s 一圈），
+  // 对齐原生效果“颜色自己流动”的观感；关掉则颜色只跟音乐特征走。
+  const uint8_t drift = SEGMENT.check1 ? (uint8_t)(strip.now >> 6) : 0;
+  const uint32_t bg = SEGCOLOR(1);         // 暗部用背景色，对齐原生惯例
   unsigned len = SEGLEN;
   for (unsigned i = 0; i < len; i++) {
-    const Rgb &c = fxOut[(uint32_t)i * TOTAL_LEDS / len];
+    const Rgb &c = fxOut[(uint32_t)i * span / len];
     if (usePal) {
       uint8_t h, s, v;
       rgb2hsv8(c, h, s, v);
-      if (v == 0) { SEGMENT.setPixelColor(i, 0); continue; }
+      if (v == 0) { SEGMENT.setPixelColor(i, bg); continue; }
       if (s < 40) { SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0)); continue; }
-      uint8_t idx = posMap ? (uint8_t)((i * 255u) / (len > 1 ? len - 1 : 1) + h)
-                           : h;
+      uint8_t idx = (posMap ? (uint8_t)((i * 255u) / (len > 1 ? len - 1 : 1) + h)
+                            : h) + drift;
       SEGMENT.setPixelColor(i, SEGMENT.color_from_palette(idx, false, false, 0, v));
     } else {
+      if (c.r == 0 && c.g == 0 && c.b == 0) { SEGMENT.setPixelColor(i, bg); continue; }
       SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0));
     }
   }
@@ -209,29 +240,29 @@ void modeLampCommon(FxId id) {
   static void fn() { modeLampCommon(fxid); } \
   static const char fn##_data[] PROGMEM = meta;
 
-LAMP_FX(mLampSpectrum,  FX_SPECTRUM_BARS,  "♪ Spectrum Bars@;;!;1v;si=0")
-LAMP_FX(mLampBeatPulse, FX_BEAT_PULSE,     "♪ Beat Pulse@;;!;1v;si=0")
-LAMP_FX(mLampLevel,     FX_LEVEL_SWEEP,    "♪ Level Sweep@;;!;1v;si=0")
-LAMP_FX(mLampImpact,    FX_BAR_IMPACT,     "♪ Bar Impact@;;!;1v;si=0")
-LAMP_FX(mLampRunner,    FX_BEAT_RUNNER,    "♪ Beat Runner@;;!;1v;si=0")
-LAMP_FX(mLampSplit,     FX_SPLIT_BANDS,    "♪ Split Bands@;;!;1v;si=0")
-LAMP_FX(mLampKeyWash,   FX_KEY_WASH,       "♪ Key Wash@;;!;1v;si=0")
-LAMP_FX(mLampChroma,    FX_CHROMA_RING,    "♪ Chroma Ring@;;!;1v;si=0")
-LAMP_FX(mLampFlow,      FX_COLOR_FLOW,     "♪ Color Flow@;;!;1v;si=0")
-LAMP_FX(mLampMelody,    FX_MELODY_LINE,    "♪ Melody Line@;;!;1v;si=0")
-LAMP_FX(mLampBloom,     FX_DOWNBEAT_BLOOM, "♪ Downbeat Bloom@;;!;1v;si=0")
-LAMP_FX(mLampLadder,    FX_BAR_LADDER,     "♪ Bar Ladder@;;!;1v;si=0")
-LAMP_FX(mLampKickSnare, FX_KICK_SNARE,     "♪ Kick & Snare@;;!;1v;si=0")
-LAMP_FX(mLampComet,     FX_PITCH_COMET,    "♪ Pitch Comet@;;!;1v;si=0")
-LAMP_FX(mLampHarmony,   FX_HARMONY_SHIFT,  "♪ Harmony Shift@;;!;1v;si=0")
-LAMP_FX(mLampVocalHalo, FX_VOCAL_HALO,     "♪ Vocal Halo@;;!;1v;si=0")
-LAMP_FX(mLampVocalBr,   FX_VOCAL_BREATH,   "♪ Vocal Breath@;;!;1v;si=0")
-LAMP_FX(mLampFormant,   FX_FORMANT_RIBBON, "♪ Formant Ribbon@;;!;1v;si=0")
-LAMP_FX(mLampDuet,      FX_DUET_SPLIT,     "♪ Duet Split@;;!;1v;si=0")
-LAMP_FX(mLampLyric,     FX_LYRIC_PULSE,    "♪ Lyric Pulse@;;!;1v;si=0")
-LAMP_FX(mLampTide,      FX_SECTION_TIDE,   "♪ Section Tide@;;!;1v;si=0")
-LAMP_FX(mLampMood,      FX_MOOD_GRADIENT,  "♪ Mood Gradient@;;!;1v;si=0")
-LAMP_FX(mLampAurora,    FX_SLOW_AURORA,    "♪ Slow Aurora@;;!;1v;si=0")
+LAMP_FX(mLampSpectrum,  FX_SPECTRUM_BARS,  "♪ Spectrum Bars@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampBeatPulse, FX_BEAT_PULSE,     "♪ Beat Pulse@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampLevel,     FX_LEVEL_SWEEP,    "♪ Level Sweep@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampImpact,    FX_BAR_IMPACT,     "♪ Bar Impact@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampRunner,    FX_BEAT_RUNNER,    "♪ Beat Runner@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampSplit,     FX_SPLIT_BANDS,    "♪ Split Bands@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampKeyWash,   FX_KEY_WASH,       "♪ Key Wash@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampChroma,    FX_CHROMA_RING,    "♪ Chroma Ring@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampFlow,      FX_COLOR_FLOW,     "♪ Color Flow@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampMelody,    FX_MELODY_LINE,    "♪ Melody Line@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampBloom,     FX_DOWNBEAT_BLOOM, "♪ Downbeat Bloom@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampLadder,    FX_BAR_LADDER,     "♪ Bar Ladder@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampKickSnare, FX_KICK_SNARE,     "♪ Kick & Snare@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampComet,     FX_PITCH_COMET,    "♪ Pitch Comet@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampHarmony,   FX_HARMONY_SHIFT,  "♪ Harmony Shift@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampVocalHalo, FX_VOCAL_HALO,     "♪ Vocal Halo@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampVocalBr,   FX_VOCAL_BREATH,   "♪ Vocal Breath@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampFormant,   FX_FORMANT_RIBBON, "♪ Formant Ribbon@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampDuet,      FX_DUET_SPLIT,     "♪ Duet Split@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampLyric,     FX_LYRIC_PULSE,    "♪ Lyric Pulse@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampTide,      FX_SECTION_TIDE,   "♪ Section Tide@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampMood,      FX_MOOD_GRADIENT,  "♪ Mood Gradient@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
+LAMP_FX(mLampAurora,    FX_SLOW_AURORA,    "♪ Slow Aurora@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0")
 
 } // namespace
 
