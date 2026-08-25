@@ -133,6 +133,22 @@ struct LampBridge {
 LampBridge bridge;
 Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 
+// RGB → (hue, sat, val)，8bit 域。lamp 效果的色相语义（频段位置、调性、
+// mood）经 hue 翻译成调色板索引，效果的空间结构与明暗动态原样保留。
+inline void rgb2hsv8(const Rgb &c, uint8_t &h, uint8_t &s, uint8_t &v) {
+  uint8_t mx = c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+  uint8_t mn = c.r < c.g ? (c.r < c.b ? c.r : c.b) : (c.g < c.b ? c.g : c.b);
+  v = mx;
+  uint8_t d = mx - mn;
+  if (mx == 0 || d == 0) { h = 0; s = 0; return; }
+  s = (uint8_t)((255 * (int)d) / mx);
+  int hh;
+  if (mx == c.r)      hh =       (43 * ((int)c.g - c.b)) / d;   // 43 ≈ 255/6
+  else if (mx == c.g) hh = 85  + (43 * ((int)c.b - c.r)) / d;
+  else                hh = 170 + (43 * ((int)c.r - c.g)) / d;
+  h = (uint8_t)(hh < 0 ? hh + 256 : hh);
+}
+
 void modeLampCommon(FxId id) {
   bridge.fill(strip.now);
   if (!SEGENV.data) {
@@ -144,11 +160,23 @@ void modeLampCommon(FxId id) {
   static const Geometry geo;               // 两管方向按默认（S1 左、首颗管底）
   // 白平衡关掉：WLED 自己有全局色彩处理，别叠两层
   fxRender(id, *st, cfg, bridge.frame, geo, false, bridge.dtMs, fxOut);
-  // 96 颗设计幅面 → 当前 segment 长度重采样（seg 恰为 96 时逐颗直映）
+  // 96 颗设计幅面 → 当前 segment 长度重采样（seg 恰为 96 时逐颗直映）。
+  // 调色板融合：palette 0 (Default) 保持效果原生配色；选了调色板则把像素
+  // 色相翻译成调色板索引、亮度原样保留 —— 效果的形状与动态不变，颜色风格
+  // 交给调色板。低饱和像素（白闪、灰）不映射，冲击感的白不被染色。
+  const bool usePal = SEGMENT.palette != 0;
   unsigned len = SEGLEN;
   for (unsigned i = 0; i < len; i++) {
     const Rgb &c = fxOut[(uint32_t)i * TOTAL_LEDS / len];
-    SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0));
+    if (usePal) {
+      uint8_t h, s, v;
+      rgb2hsv8(c, h, s, v);
+      if (v == 0) { SEGMENT.setPixelColor(i, 0); continue; }
+      if (s < 40) { SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0)); continue; }
+      SEGMENT.setPixelColor(i, SEGMENT.color_from_palette(h, false, false, 0, v));
+    } else {
+      SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0));
+    }
   }
 }
 
