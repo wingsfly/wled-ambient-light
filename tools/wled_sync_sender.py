@@ -94,6 +94,11 @@ def main():
 
     def send_frame(f):
         nonlocal smth
+        # 静音（管线 gate）不发包：500ms 后板子自动回落本地麦克风 ——
+        # 否则常驻 sender 的静音帧会永久遮蔽本地音源。
+        if f.gate:
+            stat["rich"] = "静音（已让位本地音源）"
+            return
         flags = ((1 if f.onset else 0) | (2 if f.lock else 0) | (4 if f.downbeat else 0)
                  | (8 if f.gate else 0) | (16 if f.section else 0)
                  | (32 if f.vocal_onset else 0) | (64 if f.f0_voiced else 0)
