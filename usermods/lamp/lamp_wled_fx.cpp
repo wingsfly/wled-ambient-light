@@ -33,6 +33,34 @@ constexpr float kBandHz[NUM_BANDS] = {
   2019, 2618, 3510, 4479, 6236, 9260
 };
 
+// ── 第二批 A：完整 AudioFrame 的 UDP 推送（LAMP1 协议）──
+// Mac 端 sender 调 liblamp 跑完整管线（色度/音高/人声/HPSS/段落/档位），
+// 打包成本结构推到 11989 端口。与 sender 的 struct.pack 逐字节对应 ——
+// 改这里必须同步改 tools/wled_sync_sender.py。336 字节，小端。
+constexpr uint16_t kLampSyncPort = 11989;
+constexpr uint32_t kRemoteFreshMs = 500;   // 超过则回落本地桥接
+
+struct __attribute__((packed)) LampSyncPacket {
+  char     magic[6];        // "LAMP1\0"
+  uint8_t  version;         // 1
+  uint8_t  flags;           // bit0 onset, bit1 beat_locked, bit2 downbeat,
+                            // bit3 gated, bit4 section_change, bit5 vocal_onset,
+                            // bit6 f0_voiced, bit7 key_is_major
+  float    bands[NUM_BANDS];
+  float    bands_h[NUM_BANDS];
+  float    bands_p[NUM_BANDS];
+  float    chroma[kChroma];
+  float    rms, peak, gain, bpm, conf, phase, rate, centroid, flatness,
+           key_conf, harmony, f0, f0_conf, mood, trend, novelty, dynamics,
+           percussive, bar_conf, vocal;
+  int8_t   key_root;
+  uint8_t  preset;
+  uint8_t  bpb;
+  uint8_t  bar_pos;
+  int32_t  bar_index;
+};
+static_assert(sizeof(LampSyncPacket) == 336, "LAMP1 包布局漂移，必须同步 sender");
+
 struct LampBridge {
   AudioFrame  frame;
   BeatTracker beat;
@@ -44,11 +72,49 @@ struct LampBridge {
   uint32_t lastMs = 0;
   float    dtMs = 20.0f;
 
+  LampSyncPacket remote;       // 最近一个 LAMP1 包
+  uint32_t remoteMs = 0;       // 收到时刻，0 = 从未收到
+  StylePreset prevPreset = STYLE_GENERAL;
+
+  bool remoteFresh(uint32_t now) const {
+    return remoteMs && (now - remoteMs) < kRemoteFreshMs;
+  }
+
+  // LAMP1 → AudioFrame：远端管线全字段直填，本地合成整段跳过
+  void fillFromRemote() {
+    const LampSyncPacket &r = remote;
+    for (int i = 0; i < NUM_BANDS; i++) {
+      frame.bands[i] = r.bands[i]; frame.bands_h[i] = r.bands_h[i]; frame.bands_p[i] = r.bands_p[i];
+    }
+    for (int i = 0; i < kChroma; i++) frame.chroma[i] = r.chroma[i];
+    frame.rms_fast = r.rms;
+    rmsSlow += (frame.rms_fast - rmsSlow) * (dtMs / 2000.0f);
+    frame.rms_slow = rmsSlow;
+    frame.peak = r.peak; frame.gain = r.gain;
+    frame.gated = r.flags & 0x08; frame.onset = r.flags & 0x01; frame.onset_rate = r.rate;
+    frame.bpm = r.bpm; frame.bpm_conf = r.conf;
+    frame.beat_locked = r.flags & 0x02; frame.phase = r.phase;
+    frame.centroid_hz = r.centroid; frame.flatness = r.flatness; frame.percussive = r.percussive;
+    frame.key_root = r.key_root; frame.key_is_major = r.flags & 0x80;
+    frame.key_conf = r.key_conf; frame.harmony_move = r.harmony;
+    frame.f0_hz = r.f0; frame.f0_conf = r.f0_conf; frame.f0_voiced = r.flags & 0x40;
+    frame.energy_trend = r.trend; frame.section_novelty = r.novelty;
+    frame.section_change = r.flags & 0x10; frame.mood = r.mood; frame.dynamics = r.dynamics;
+    frame.beats_per_bar = r.bpb; frame.bar_pos = r.bar_pos; frame.bar_index = r.bar_index;
+    frame.bar_conf = r.bar_conf; frame.downbeat = r.flags & 0x04;
+    frame.vocal = r.vocal; frame.vocal_onset = r.flags & 0x20;
+    StylePreset p = r.preset < STYLE_COUNT ? (StylePreset)r.preset : STYLE_GENERAL;
+    frame.preset_changed = p != prevPreset;
+    frame.preset = prevPreset = p;
+  }
+
   void fill(uint32_t now) {
     if (now == lastMs) return;               // 每 WLED 帧只算一次，多 segment 共用
     dtMs = (lastMs && now > lastMs) ? (float)(now - lastMs) : 20.0f;
     if (dtMs > 100.0f) dtMs = 100.0f;
     lastMs = now;
+
+    if (remoteFresh(now)) { fillFromRemote(); return; }
 
     um_data_t *um = nullptr;
     if (!UsermodManager::getUMData(&um, USERMOD_ID_AUDIOREACTIVE)) {
@@ -134,9 +200,9 @@ LampBridge bridge;
 Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 
 // 亮度动态型效果（整管近单色相）用位置铺调色板；空间多彩型用色相映射。
-// 第一批里旋律/人声类走回退分支时也近单色相，一并归位置型 —— 第二批
-// chroma/f0 数据到位后，把 KeyWash/ChromaRing 等挪回色相型再审。
-inline bool fxPaletteByPosition(FxId id) {
+// 旋律/人声类是「按数据档动态归类」：LAMP1 完整数据在（rich）时它们有真实
+// 色相语义（调性/色度/音高/共振峰）→ 色相映射；退化回退分支近单色相 → 位置型。
+inline bool fxPaletteByPosition(FxId id, bool rich) {
   switch (id) {
     case FX_SPECTRUM_BARS:      // 频段彩虹沿管
     case FX_SPLIT_BANDS:        // 低/高频两段异色
@@ -144,6 +210,11 @@ inline bool fxPaletteByPosition(FxId id) {
     case FX_MOOD_GRADIENT:      // 沿管情绪渐变
     case FX_SLOW_AURORA:        // 三相位极光
       return false;
+    case FX_KEY_WASH: case FX_CHROMA_RING: case FX_MELODY_LINE:
+    case FX_PITCH_COMET: case FX_HARMONY_SHIFT: case FX_VOCAL_HALO:
+    case FX_VOCAL_BREATH: case FX_FORMANT_RIBBON: case FX_DUET_SPLIT:
+    case FX_LYRIC_PULSE:
+      return !rich;
     default:
       return true;
   }
@@ -209,7 +280,7 @@ void modeLampCommon(FxId id) {
   //    调色板上漂移。
   // 低饱和像素（白闪、灰）两型都不映射，冲击感的白不被染色。
   const bool usePal = SEGMENT.palette != 0;
-  const bool posMap = fxPaletteByPosition(id);
+  const bool posMap = fxPaletteByPosition(id, bridge.remoteFresh(strip.now));
   // mirror 兼容：seg 开镜像时 vLength 已折半，只采左管（S1=[0,47]）交引擎
   // 镜像出右半 —— 对称类效果视觉不变，与原生效果的 mirror 语义统一。
   const unsigned span = SEGMENT.mirror ? LEDS_PER_TUBE : TOTAL_LEDS;
@@ -294,10 +365,39 @@ class LampFxUsermod : public Usermod {
       strip.addEffect(255, &mLampAurora,    mLampAurora_data);
       beatInit(bridgeBeatRef(), BeatConfig{});
     }
-    void loop() override {}
+
+    void connected() override {
+      udp.stop();
+      udpOk = udp.begin(kLampSyncPort) != 0;
+    }
+
+    void loop() override {
+      if (!udpOk) return;
+      // 非阻塞 drain：一轮 loop 把积压的包全收掉，只留最新
+      int len;
+      while ((len = udp.parsePacket()) > 0) {
+        if (len != (int)sizeof(LampSyncPacket)) { udp.flush(); continue; }
+        LampSyncPacket pkt;
+        udp.read((uint8_t*)&pkt, sizeof(pkt));
+        if (memcmp(pkt.magic, "LAMP1", 5) != 0 || pkt.version != 1) continue;
+        bridge.remote = pkt;
+        bridge.remoteMs = millis();
+      }
+    }
+
+    void addToJsonInfo(JsonObject &root) override {
+      JsonObject user = root["u"];
+      if (user.isNull()) user = root.createNestedObject("u");
+      JsonArray arr = user.createNestedArray(F("Lamp FX Data"));
+      if (bridge.remoteFresh(millis())) arr.add(F("full (LAMP1)"));
+      else arr.add(F("basic (bridge)"));
+    }
+
     uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }
 
   private:
+    WiFiUDP udp;
+    bool udpOk = false;
     static BeatTracker &bridgeBeatRef() { return bridge.beat; }
 };
 
