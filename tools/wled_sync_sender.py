@@ -112,14 +112,16 @@ def main():
                            f.percussive, f.bar_conf, f.vocal,
                            max(-1, min(11, f.key_root)), max(0, min(255, f.preset)),
                            f.bpb & 0xFF, f.bar_pos & 0xFF, f.bar_index)
-        # V2 兼容包：量纲反向对齐固件桥接（rms*3、bands*6 → 0-255）
-        vol = float(np.clip(f.rms * 3.0 * 255.0, 0, 255))
+        # V2 兼容包：bands 按 kFxBandScale=6 反向（实测 bmax≈0.18~0.27，×6×255
+        # 恰好满格）；rms 的 AGC 稳态实测 ≈0.03（比 kFxLevelScale 假设低一个量级），
+        # 系数 6000 让正常响度落 ~180、响段饱和。
+        vol = float(np.clip(f.rms * 6000.0, 0, 255))
         smth = smth * 0.8 + vol * 0.2
         fft8 = bytes(int(np.clip(b * 6.0 * 255.0, 0, 255)) for b in f.bands)
         mp = f.f0 if f.f0_voiced and f.f0 > 1 else max(1.0, min(11025.0, f.centroid))
         pkt2 = struct.pack("<6s2sffBB16s2sff", b"00002\0", b"\0\0",
                            vol, smth, 1 if f.onset else 0, 0, fft8, b"\0\0",
-                           float(max(f.bands) * 100.0), mp)
+                           float(max(f.bands) * 1000.0), mp)
         for pkt, port in ((pkt1, 11989), (pkt2, 11988)):
             try: sock.sendto(pkt, ("239.0.0.1", port))
             except OSError: pass
@@ -127,7 +129,7 @@ def main():
                 try: sock.sendto(pkt, (target_ip, port))
                 except OSError: pass
         stat["n"] += 1; stat["vol"] = max(stat["vol"], vol)
-        stat["rich"] = "key=%d bpm=%.0f voc=%.2f" % (f.key_root, f.bpm, f.vocal)
+        stat["rich"] = "rms=%.5f gain=%.2f bmax=%.5f bpm=%.0f" % (f.rms, f.gain, max(f.bands), f.bpm)
 
     def cb(indata, nframes, t, status):
         mono = np.ascontiguousarray(indata.mean(axis=1), dtype=np.float32)
