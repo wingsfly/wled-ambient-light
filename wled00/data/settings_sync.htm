@@ -288,5 +288,131 @@ Baud rate:
 <hr>
 <button type="button" onclick="B()">Back</button><button type="submit">Save</button>
 </form>
+
+<script>
+/* lamp fork：设置页中文化。跟随主页面的语言选择（localStorage lampLang，
+   默认中文）。字典精确匹配文本节点/label/title；技术标识（GPIO、色序、
+   协议名、时区）刻意保留英文。动态表单（Usermods 页）由 observer 覆盖。 */
+(function(){
+if(localStorage.getItem("lampLang")==="en")return;
+var Z={
+"WLED Settings":"WLED 设置","WiFi & Network":"WiFi 与网络","WiFi & Network Settings":"WiFi 与网络设置",
+"WiFi Settings":"WiFi 设置","LED & Hardware":"灯珠与硬件","LED Settings":"LED 设置","User Interface":"用户界面",
+"UI Settings":"界面设置","Sync Interfaces":"同步接口","Sync Settings":"同步设置","Time & Macros":"时间与宏",
+"Time Settings":"时间设置","Usermods":"扩展模块","Usermod Settings":"扩展模块设置","Usermod Setup":"扩展模块配置",
+"Security & Updates":"安全与更新","Security & Update Setup":"安全与更新配置","DMX Settings":"DMX 设置",
+"Back":"返回","Save":"保存","Save & Connect":"保存并连接","Apply":"应用","Submit":"提交","Upload":"上传",
+"Scan":"扫描","About":"关于","Loading...":"加载中...","Loading settings...":"设置加载中...",
+"Wireless network":"无线网络","Network password":"网络密码","Password:":"密码：","Passphrase:":"口令：",
+"BSSID (optional):":"BSSID（可选）：","Multi-AP":"多热点","Static IP (leave at 0.0.0.0 for DHCP):":"静态 IP（0.0.0.0 = DHCP）：",
+"Static gateway:":"静态网关：","Static subnet mask:":"子网掩码：","DNS server address:":"DNS 服务器地址：",
+"DNS & mDNS":"DNS 与 mDNS","mDNS address (leave empty for no mDNS):":"mDNS 地址（留空禁用）：",
+"Client IP:":"客户端 IP：","Device Name:":"设备名称：","Configure Access Point":"配置热点（AP）",
+"AP SSID (leave empty for no AP):":"AP 名称（留空禁用）：","AP password (leave empty for open):":"AP 密码（留空开放）：",
+"Hide AP name:":"隐藏 AP 名称：","Access Point WiFi channel:":"AP WiFi 信道：","AP opens:":"AP 开启时机：",
+"No connection after boot":"启动后无连接时","Disconnected":"断开连接时","Always":"始终","Never (not recommended)":"从不（不推荐）",
+"Temporary (no connection after boot)":"临时（启动后无连接）","AP IP:":"AP 的 IP：","Not active":"未启用",
+"Force 802.11g mode (ESP8266 only):":"强制 802.11g 模式（仅 ESP8266）：","Disable WiFi sleep:":"禁用 WiFi 休眠：",
+"Disabling WiFi sleep increases power consumption":"禁用 WiFi 休眠会增加功耗","WiFi Power":"WiFi 功率",
+"Max. TX power:":"最大发射功率：","WARNING: Modifying TX power may render device unreachable.":"警告：修改发射功率可能导致设备失联。",
+"Ethernet Type":"以太网类型","ESP-NOW Wireless":"ESP-NOW 无线","Enable ESP-NOW:":"启用 ESP-NOW：",
+"Listen for events over ESP-NOW":"通过 ESP-NOW 监听事件","Last device seen:":"最近发现的设备：",
+"Linked MACs (10 max):":"绑定 MAC（最多 10 个）：","Connected to":"已连接到","WPA/WPA2-Enterprise":"WPA/WPA2 企业级",
+"Identity:":"身份：","Anonymous identity:":"匿名身份：",
+"LED setup":"灯珠配置","Hardware setup":"硬件配置","LED outputs:":"LED 输出：","Length:":"数量：",
+"Color Order:":"色序：","Color Order Override:":"色序覆盖：","Total LED count:":"灯珠总数：",
+"Maximum PSU Current:":"电源最大电流：","PSU:":"电源：","Enable automatic brightness limiter:":"启用自动亮度限制：",
+"Automatically limits brightness to stay close to the limit.":"自动限制亮度以不超过电流上限。",
+"Recommended power supply for brightest white:":"最亮白光建议电源：","LED memory usage:":"LED 内存占用：",
+"Bootup brightness:":"开机亮度：","Global brightness factor:":"全局亮度系数：","Force max brightness:":"强制最大亮度：",
+"Auto-calculate W channel from RGB:":"由 RGB 自动计算白通道：","Calculate CCT from RGB:":"由 RGB 计算色温：",
+"Global override for Auto-calculate white:":"自动白光计算全局覆盖：","First LED:":"起始灯珠：","Last LED:":"结束灯珠：",
+"Skip first LEDs:":"跳过前几颗：","Off Refresh":"关灯时刷新","Reversed":"反向","Make a segment for each output:":"每路输出建独立分段：",
+"Custom bus start indices:":"自定义总线起始索引：","Use global":"使用全局值","Swap:":"交换：",
+"Default transition time:":"默认过渡时长：","Enable transitions:":"启用过渡：","Transitions":"过渡",
+"Random Palettes":"随机调色板","Random palettes":"随机调色板","Palette wrapping:":"调色板回绕：",
+"Linear (always wrap)":"线性（总是回绕）","Linear (never wrap)":"线性（从不回绕）","Linear (wrap if moving)":"线性（移动时回绕）",
+"Timed light":"定时渐灭","Default duration:":"默认时长：","Default target brightness:":"默认目标亮度：",
+"Fade":"渐变","Fade Color":"颜色渐变","Gradual":"逐渐","Instant":"立即",
+"Buttons":"按键","Button Action Presets":"按键动作预设","Short press":"短按","Long press":"长按","Double press":"双击",
+"Pushbutton":"轻触按键","Push inverted":"轻触（反相）","Switch":"开关","PIR sensor":"人体感应",
+"Touch":"触摸","Touch (switch)":"触摸（开关）","Analog":"模拟","Analog inverted":"模拟（反相）",
+"Analog Button setup":"模拟按键配置","Analog function":"模拟功能","Disable internal pull-up/down:":"禁用内部上下拉：",
+"Relay GPIO:":"继电器 GPIO：","IR Remote":"红外遥控","IR info":"红外说明","Apply IR change to main segment only:":"红外只作用于主分段：",
+"JSON remote":"JSON 遥控","JSON file:":"JSON 文件：",
+"Sync setup":"同步配置","Sync groups":"同步组","Send":"发送","Receive":"接收","Send:":"发送：","Receive:":"接收：",
+"Brightness":"亮度","Color":"颜色","Effects":"特效","Segment options":"分段选项",
+"Send notifications on direct change:":"直接修改时发送通知：","Send notifications on button press or IR:":"按键/红外时发送通知：",
+"Send Alexa notifications:":"发送 Alexa 通知：","Send Philips Hue change notifications:":"发送 Hue 变更通知：",
+"Skip out-of-sequence packets:":"跳过乱序数据包：","UDP Port:":"UDP 端口：","Enable Sync on start:":"启动时启用同步：",
+"Instance List":"实例列表","Enable instance list:":"启用实例列表：","Make this instance discoverable:":"允许被其他实例发现：",
+"Realtime":"实时","Receive UDP realtime:":"接收 UDP 实时流：","Network DMX input":"网络 DMX 输入",
+"Wired DMX Input":"有线 DMX 输入","DMX Output":"DMX 输出","Type:":"类型：","Multicast:":"组播：",
+"Start universe:":"起始 Universe：","Skip out-of-sequence:":"跳过乱序：","DMX mode:":"DMX 模式：",
+"E1.31 port priority:":"E1.31 端口优先级：","Realtime LED offset:":"实时流灯珠偏移：",
+"Force max brightness":"强制最大亮度","Disable realtime gamma correction:":"禁用实时流伽马校正：",
+"Alexa Voice Assistant":"Alexa 语音助手","Emulate Alexa device:":"模拟 Alexa 设备：","Alexa invocation name:":"Alexa 唤醒名称：",
+"Alexa On/Off Preset:":"Alexa 开/关预设：","This firmware build does not include Alexa support.":"当前固件未编入 Alexa 支持。",
+"MQTT":"MQTT","Enable MQTT:":"启用 MQTT：","Broker:":"服务器：","Port:":"端口：","Client ID:":"客户端 ID：",
+"Device Topic:":"设备主题：","Group Topic:":"分组主题：","Publish on button press:":"按键时发布：",
+"Retain brightness & color messages:":"保留亮度与颜色消息：","The MQTT credentials are sent over an unsecured connection.":"MQTT 凭据以非加密方式传输。",
+"This firmware build does not include MQTT support.":"当前固件未编入 MQTT 支持。",
+"Philips Hue":"飞利浦 Hue","Hue Bridge IP:":"Hue 网桥 IP：","Hue status:":"Hue 状态：",
+"Press the pushlink button on the bridge, after that save this page!":"按下网桥配对键后保存本页！",
+"This firmware build does not include Philips Hue support.":"当前固件未编入 Hue 支持。",
+"Serial":"串口","Baud rate:":"波特率：","This firmware build does not support Serial interface.":"当前固件不支持串口接口。",
+"Keep at 115200 to use Improv. Some boards may not support high rates.":"使用 Improv 请保持 115200；部分板不支持高波特率。",
+"Time setup":"时间配置","Get time from NTP server:":"从 NTP 服务器取时：","NTP server:":"NTP 服务器：",
+"Use 24h format:":"使用 24 小时制：","Time zone:":"时区：","UTC offset:":"UTC 偏移：","Longitude:":"经度：","Latitude:":"纬度：",
+"Get location":"获取位置","Current local time is":"当前本地时间","Clock":"时钟","Clock Overlay:":"时钟叠加：",
+"Analog Clock overlay:":"模拟时钟叠加：","Show 5min marks:":"显示五分钟刻度：","Seconds (as trail):":"秒针（拖尾）：",
+"Show clock overlay only if all LEDs are solid black:":"仅全黑时显示时钟叠加：","Countdown Mode:":"倒计时模式：",
+"Countdown Goal:":"倒计时目标：","Countdown-Over Preset:":"倒计时结束预设：","Macro Presets":"宏预设",
+"Presets can be used as macros for both JSON and HTTP API commands.":"预设可作为 JSON 与 HTTP API 命令的宏使用。",
+"Use 0 for the default action instead of a preset":"填 0 表示默认动作而非预设",
+"Alexa On/Off Preset:":"Alexa 开/关预设：","Timer & Alexa Presets":"定时与 Alexa 预设",
+"Time-Controlled Presets":"定时预设","Add Timer":"添加定时","Delete Timer":"删除定时","Hour":"时","Minute":"分",
+"Preset":"预设","En.":"启用","Sunrise":"日出","Sunset":"日落","Holidays:":"节假日：","Date:":"日期：",
+"Power up":"上电动作",
+"UI Appearance":"界面外观","UI Background":"界面背景","BG image:":"背景图：","Random BG image settings":"随机背景图设置",
+"Enable simplified UI:":"启用精简界面：","I hate dark mode:":"我讨厌深色模式：","Custom CSS:":"自定义 CSS：",
+"Clear local storage":"清除本地存储","Config template:":"配置模板：",
+"Lock wireless (OTA) software update:":"锁定无线（OTA）固件更新：","Only allow update from same network/WiFi:":"仅允许同网络更新：",
+"Settings on this page are only changeable if OTA lock is disabled!":"仅在 OTA 未锁定时才能修改本页设置！",
+"Deny access to WiFi settings if locked:":"锁定时禁止访问 WiFi 设置：","Factory reset:":"恢复出厂设置：",
+"All configuration and presets will be erased.":"将清除全部配置与预设。","HTTP API":"HTTP API",
+"Enable ArduinoOTA:":"启用 ArduinoOTA：","Settings PIN:":"设置 PIN 码：","PIN required":"需要 PIN 码",
+"Please enter settings PIN code":"请输入设置 PIN 码","Please enter a 4 digit number":"请输入 4 位数字",
+"Backup & Restore":"备份与恢复","Backup configuration":"备份配置","Restore configuration":"恢复配置",
+"Backup presets":"备份预设","Restore presets":"恢复预设","Software Update":"固件更新","Update WLED":"更新 WLED",
+"Installed version:":"当前版本：","Enable watchdog:":"启用看门狗：",
+"Reboot required to apply changes.":"需重启后生效。","Reboot required.":"需要重启。",
+"General settings":"常规设置","Mode:":"模式：","Enabled:":"已启用：","Enabled":"已启用","Disabled":"已禁用",
+"None":"无","Custom":"自定义","Custom port":"自定义端口","Normal":"常规","Regular":"常规",
+"Slow":"慢","Slowest":"最慢","Fast":"快","Fastest":"最快","Accurate":"精确","Available":"可用",
+"Top":"顶","Bottom":"底","Left":"左","Right":"右","Horizontal":"水平","Vertical":"垂直",
+"Red":"红","Green":"绿","Blue":"蓝","White":"白","Effect":"特效","Palette":"调色板",
+"Pin Info":"引脚信息","Pin Notes":"引脚备注","Used by":"占用者","GPIO:":"GPIO：","Pin":"引脚",
+"Global I":"全局 I","Note:":"注：","Values above":"以上数值","This will cause overlap.":"这会造成重叠。",
+"Make sure you enter correct value for each LED output.":"请确认每路 LED 输出的数值正确。",
+"Wait and set":"稍候设置","Populate":"填充","Test":"测试"
+};
+function tx(t){var s=t.nodeValue,m=s.trim();if(m&&Z[m])t.nodeValue=s.replace(m,Z[m]);}
+function walk(r){
+  if(!r)return;
+  if(r.nodeType===3){tx(r);return;}
+  if(r.nodeType!==1||r.tagName==="SCRIPT"||r.tagName==="STYLE")return;
+  if(r.title&&Z[r.title])r.title=Z[r.title];
+  for(var n=r.firstChild;n;n=n.nextSibling)walk(n);
+}
+function go(){
+  walk(document.body);
+  new MutationObserver(function(ms){
+    for(var i=0;i<ms.length;i++)for(var j=0;j<ms[i].addedNodes.length;j++)walk(ms[i].addedNodes[j]);
+  }).observe(document.body,{childList:true,subtree:true});
+}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",go);else go();
+})();
+</script>
 </body>
 </html>
