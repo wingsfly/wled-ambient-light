@@ -1279,6 +1279,12 @@ void respondModeData(AsyncWebServerRequest* request) {
         ++fx_index; // we're really done
       }
 
+      // lamp fork：本块一个字节都没写下（块缓冲剩余空间连一条元数据都装不下）
+      // 时必须返回 RESPONSE_TRY_AGAIN —— 返回 0 会被 AsyncWebServer 当作流结束，
+      // fxdata 间歇性截断、UI 拿到残破 JSON 渲染不出特效控件。上游元数据短
+      // （~14B）几乎不触发；♪ 系列带滑条元数据 ~50B 后概率放大到实测可见。
+      if (bytes_written == 0 && fx_index <= strip.getModeCount()) return RESPONSE_TRY_AGAIN;
+
       return bytes_written;
   });
 }
