@@ -23,6 +23,7 @@
 #include "lamp_beat.h"
 #include "lamp_onset.h"
 #include "lamp_auto.h"
+#include "lamp_pipeline.h"
 
 namespace {
 
@@ -204,6 +205,38 @@ Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 // RTC noinit 段在 PANIC 重启后保留：崩溃时停留的最后标记 = 崩溃区间。
 // 定位完成后整段移除。
 RTC_NOINIT_ATTR uint32_t lampTrace;
+
+// ── 第二批 B 可行性基准：S3 上跑一次完整 lamp 管线（GENERAL 档，
+// 1024 FFT / hop 512 → 帧预算 23.2ms），合成谱喂 50 帧测均值耗时。
+// 只测 pipelineProcess 本体（FFT 另计：arduinoFFT 1024 点在 S3 ≈3ms）。
+// 结果进 Info（Pipeline bench）。决策后移除。
+uint32_t benchPipelineUs = 0;
+
+void runPipelineBench() {
+  static Pipeline       bp;        // ~10KB，bss
+  static PipelineConfig bc;
+  if (!pipelineInit(bp, bc, STYLE_GENERAL)) return;
+  constexpr int N = 1024;
+  static float pcm[N];
+  static float mag[N / 2 + 1];
+  uint32_t rng = 12345;
+  for (int i = 0; i < N; i++) {
+    rng = rng * 1664525u + 1013904223u;
+    pcm[i] = 0.3f * sinf(2.0f * (float)M_PI * 150.0f * i / kSampleRate)
+           + 0.05f * (float)((int32_t)rng >> 16) / 32768.0f;
+  }
+  uint32_t t0 = micros();
+  for (int k = 0; k < 50; k++) {
+    for (int i = 0; i <= N / 2; i++) {          // 合成动谱：让 onset/HPSS/pitch 有真活干
+      rng = rng * 1664525u + 1013904223u;
+      float base = (i > 3 && i < 60) ? 6.0f : 0.4f;
+      mag[i] = base * (0.5f + (float)((rng >> 16) & 0xFF) / 255.0f)
+             + ((k % 10 < 2 && i < 12) ? 25.0f : 0.0f);   // 周期性“鼓点”
+    }
+    pipelineProcess(bp, bc, pcm, mag, k * 23);
+  }
+  benchPipelineUs = (micros() - t0) / 50;
+}
 
 // ♪ Auto：lamp_auto 按音乐内容自动挑效果（f0 占比/音高抖动/打击度/频谱
 // 分裂度打分 + 滞回防抖）。状态全局一份 —— 多 segment 同跑 Auto 时同步换。
@@ -400,6 +433,7 @@ class LampFxUsermod : public Usermod {
       strip.addEffect(255, &mLampAurora,    mLampAurora_data);
       strip.addEffect(255, &modeLampAuto,   mLampAuto_data);
       beatInit(bridgeBeatRef(), BeatConfig{});
+      runPipelineBench();
     }
 
     void connected() override {
@@ -429,6 +463,8 @@ class LampFxUsermod : public Usermod {
       else arr.add(F("basic (bridge)"));
       JsonArray tr = user.createNestedArray(F("Lamp trace"));
       tr.add((int)lampTrace);
+      JsonArray pb = user.createNestedArray(F("Pipeline bench"));
+      pb.add((int)benchPipelineUs); pb.add(F(" µs/frame"));
       // ♪ Auto 当前选中的效果 —— 「灯怎么在放这个」的第一排查入口
       JsonArray af = user.createNestedArray(F("Auto FX"));
       af.add(fxName(autoSt.current));
