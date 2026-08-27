@@ -1,0 +1,4 @@
+{
+  "name": "ina219_lamp",
+  "build": { "libArchive": false }
+}
