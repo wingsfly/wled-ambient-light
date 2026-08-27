@@ -422,7 +422,9 @@ var Z={
 "Reboot WLED":"重启 WLED","Close Info":"关闭信息","Instance List":"实例列表",
 "Audio Source":"音频源","Sound Processing":"声音处理","AGC Gain":"AGC 增益",
 "UDP Sound Sync":"UDP 声音同步","Line-In Jack":"线路输入插孔","Autosave":"自动保存",
-"GEQ Input Level":"GEQ 输入电平"
+"GEQ Input Level":"GEQ 输入电平",
+"Power Monitor":"电流监测","Bus voltage":"母线电压","Main current":"主路电流",
+"Main power":"主路功率","Lamp FX Data":"灯效数据源"
 };
 var LK="lampLang";
 function tx(t){var s=t.nodeValue,m=s.trim();if(m&&Z[m])t.nodeValue=s.replace(m,Z[m]);}
@@ -454,6 +456,41 @@ window.lampToggleLang=function(){
   if(zh)location.reload();else apply();
 };
 if(localStorage.getItem(LK)!=="en")apply();
+})();
+</script>
+<script>
+/* lamp fork：主页电流监测卡片（INA219 数据，挂在预设面板底部）。
+   折叠态零请求；展开时每秒 fetch /json/info，只更新三个数值文本节点 ——
+   刻意不走 requestJson()，避免触发 WLED UI 的全局状态重绘。 */
+(function(){
+var KEY="lampPowerShow", timer=null;
+function el(id){return document.getElementById(id);}
+function build(){
+  var host=el("Presets");
+  if(!host)return;
+  var d=document.createElement("div");
+  d.id="lampPower";
+  d.innerHTML='<div id="lpHead" style="cursor:pointer;margin:10px 2px 4px;font-size:14px;opacity:.85;">⚡ <span>Power Monitor</span> <span id="lpArrow">▸</span></div>'+
+    '<div id="lpBody" style="display:none;background:var(--c-2,#333);border-radius:12px;padding:8px 14px;font-size:14px;text-align:left;line-height:1.7;">'+
+    '<div><span>Bus voltage</span>: <span id="lpV">–</span> V</div>'+
+    '<div><span>Main current</span>: <span id="lpA">–</span> A</div>'+
+    '<div><span>Main power</span>: <span id="lpW">–</span> W</div></div>';
+  host.appendChild(d);
+  el("lpHead").onclick=function(){ timer?fold():unfold(); };
+  if(localStorage.getItem(KEY)==="1")unfold();
+}
+function tick(){
+  fetch(getURL("/json/info")).then(function(r){return r.json();}).then(function(j){
+    var u=j.u||{};
+    function g(k){var v=u[k];return (v&&v.length)?String(v[0]):"–";}
+    el("lpV").textContent=g("Bus voltage");
+    el("lpA").textContent=g("Main current");
+    el("lpW").textContent=g("Main power");
+  }).catch(function(){});
+}
+function unfold(){el("lpBody").style.display="";el("lpArrow").textContent="▾";tick();timer=setInterval(tick,1000);localStorage.setItem(KEY,"1");}
+function fold(){el("lpBody").style.display="none";el("lpArrow").textContent="▸";clearInterval(timer);timer=null;localStorage.setItem(KEY,"0");}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",build);else build();
 })();
 </script>
 </body>
