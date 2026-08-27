@@ -413,6 +413,9 @@ class LampFxUsermod : public Usermod {
       JsonArray arr = user.createNestedArray(F("Lamp FX Data"));
       if (bridge.remoteFresh(millis())) arr.add(F("full (LAMP1)"));
       else arr.add(F("basic (bridge)"));
+      // ♪ Auto 当前选中的效果 —— 「灯怎么在放这个」的第一排查入口
+      JsonArray af = user.createNestedArray(F("Auto FX"));
+      af.add(fxName(autoSt.current));
       // 上次复位原因：排查「切换特效即重启」类问题的第一手证据 ——
       // PANIC/WDT 指向固件 bug，BROWNOUT 指向供电跌落（换 J1 适配器供电）。
       JsonArray rr = user.createNestedArray(F("Reset reason"));

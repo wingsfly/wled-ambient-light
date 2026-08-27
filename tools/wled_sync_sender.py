@@ -92,6 +92,8 @@ def main():
     smth = 0.0
     stat = {"n": 0, "vol": 0.0, "rich": ""}
 
+    vol_env = 0.02
+
     def send_frame(f):
         nonlocal smth
         # 静音（管线 gate）不发包：500ms 后板子自动回落本地麦克风 ——
@@ -112,10 +114,12 @@ def main():
                            f.percussive, f.bar_conf, f.vocal,
                            max(-1, min(11, f.key_root)), max(0, min(255, f.preset)),
                            f.bpb & 0xFF, f.bar_pos & 0xFF, f.bar_index)
-        # V2 兼容包：bands 按 kFxBandScale=6 反向（实测 bmax≈0.18~0.27，×6×255
-        # 恰好满格）；rms 的 AGC 稳态实测 ≈0.03（比 kFxLevelScale 假设低一个量级），
-        # 系数 6000 让正常响度落 ~180、响段饱和。
-        vol = float(np.clip(f.rms * 6000.0, 0, 255))
+        # V2 兼容包：bands 按 kFxBandScale=6 反向（实测恰好满格）。
+        # rms→vol 必须包络归一而不是固定系数：AGC 稳态随素材漂（实测
+        # 0.03→0.12），固定系数会恒饱和 → 原生效果失去动态（实测踩中）。
+        nonlocal vol_env
+        vol_env = max(vol_env * 0.9995, f.rms, 1e-4)
+        vol = float(np.clip(f.rms / vol_env * 220.0, 0, 255))
         smth = smth * 0.8 + vol * 0.2
         fft8 = bytes(int(np.clip(b * 6.0 * 255.0, 0, 255)) for b in f.bands)
         mp = f.f0 if f.f0_voiced and f.f0 > 1 else max(1.0, min(11025.0, f.centroid))
@@ -129,7 +133,9 @@ def main():
                 try: sock.sendto(pkt, (target_ip, port))
                 except OSError: pass
         stat["n"] += 1; stat["vol"] = max(stat["vol"], vol)
-        stat["rich"] = "rms=%.5f gain=%.2f bmax=%.5f bpm=%.0f" % (f.rms, f.gain, max(f.bands), f.bpm)
+        stat["on"] = stat.get("on", 0) + (1 if f.onset else 0)
+        stat["rich"] = "rms=%.4f dyn=%.2f perc=%.2f onset/2s=%d phase=%.2f bmax=%.4f" % (
+            f.rms, f.dynamics, f.percussive, stat["on"], f.phase, max(f.bands))
 
     def cb(indata, nframes, t, status):
         mono = np.ascontiguousarray(indata.mean(axis=1), dtype=np.float32)
@@ -143,7 +149,7 @@ def main():
         while True:
             time.sleep(2)
             print("pkts=%d vol-peak=%.0f %s" % (stat["n"], stat["vol"], stat["rich"]), flush=True)
-            stat["n"] = 0; stat["vol"] = 0.0
+            stat["n"] = 0; stat["vol"] = 0.0; stat["on"] = 0
 
 if __name__ == "__main__":
     main()
