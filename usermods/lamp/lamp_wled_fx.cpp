@@ -354,7 +354,8 @@ LAMP_FX(mLampAurora,    FX_SLOW_AURORA,    "♪ Slow Aurora@Speed,Sensitivity,,,
 class LampFxUsermod : public Usermod {
   public:
     void setup() override {
-      strip.addEffect(255, &modeLampAuto,   mLampAuto_data);
+      // ⚠️ 注册顺序 = ID 分配顺序（255 自动填洞）。新效果只许追加在**最后**，
+      // 插前面会把既有 ♪ 效果的 ID 全部后移，用户已存预设集体指错效果。
       strip.addEffect(255, &mLampSpectrum,  mLampSpectrum_data);
       strip.addEffect(255, &mLampBeatPulse, mLampBeatPulse_data);
       strip.addEffect(255, &mLampLevel,     mLampLevel_data);
@@ -378,6 +379,7 @@ class LampFxUsermod : public Usermod {
       strip.addEffect(255, &mLampTide,      mLampTide_data);
       strip.addEffect(255, &mLampMood,      mLampMood_data);
       strip.addEffect(255, &mLampAurora,    mLampAurora_data);
+      strip.addEffect(255, &modeLampAuto,   mLampAuto_data);
       beatInit(bridgeBeatRef(), BeatConfig{});
     }
 
