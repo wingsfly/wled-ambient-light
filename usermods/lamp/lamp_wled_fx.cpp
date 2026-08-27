@@ -22,6 +22,7 @@
 #include "lamp_fx.h"
 #include "lamp_beat.h"
 #include "lamp_onset.h"
+#include "lamp_auto.h"
 
 namespace {
 
@@ -199,6 +200,11 @@ struct LampBridge {
 LampBridge bridge;
 Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 
+// ♪ Auto：lamp_auto 按音乐内容自动挑效果（f0 占比/音高抖动/打击度/频谱
+// 分裂度打分 + 滞回防抖）。状态全局一份 —— 多 segment 同跑 Auto 时同步换。
+AutoState  autoSt;
+AutoConfig autoCfg;
+
 // 亮度动态型效果（整管近单色相）用位置铺调色板；空间多彩型用色相映射。
 // 旋律/人声类是「按数据档动态归类」：LAMP1 完整数据在（rich）时它们有真实
 // 色相语义（调性/色度/音高/共振峰）→ 色相映射；退化回退分支近单色相 → 位置型。
@@ -306,6 +312,14 @@ void modeLampCommon(FxId id) {
   }
 }
 
+// ♪ Auto：每帧先让选择器投票，再按它选中的效果渲染
+void modeLampAuto() {
+  bridge.fill(strip.now);
+  autoUpdate(autoSt, autoCfg, bridge.frame, strip.now);
+  modeLampCommon(autoSt.current);
+}
+static const char mLampAuto_data[] PROGMEM = "♪ Auto@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0";
+
 // 23 个包装函数 + 元数据（名字带 ♪ 前缀，特效列表里聚在一起好找）
 #define LAMP_FX(fn, fxid, meta) \
   static void fn() { modeLampCommon(fxid); } \
@@ -340,6 +354,7 @@ LAMP_FX(mLampAurora,    FX_SLOW_AURORA,    "♪ Slow Aurora@Speed,Sensitivity,,,
 class LampFxUsermod : public Usermod {
   public:
     void setup() override {
+      strip.addEffect(255, &modeLampAuto,   mLampAuto_data);
       strip.addEffect(255, &mLampSpectrum,  mLampSpectrum_data);
       strip.addEffect(255, &mLampBeatPulse, mLampBeatPulse_data);
       strip.addEffect(255, &mLampLevel,     mLampLevel_data);
