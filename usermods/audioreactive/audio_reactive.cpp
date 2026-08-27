@@ -162,6 +162,7 @@ static FFTsampleType* windowFFT = nullptr;
 
 // use audio source class (ESP32 specific)
 #include "audio_source.h"
+#include "../lamp/lamp_pcm_tap.h"   // lamp fork：PCM 分接给本地完整管线
 #include "audio_stream_probe.h"
 constexpr i2s_port_t I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change !)
 constexpr int BLOCK_SIZE = 128;                  // I2S buffer size (samples)
@@ -372,6 +373,19 @@ void FFTcode(void * parameter)
 
     // get a fresh batch of samples from I2S
     if (audioSource) audioSource->getSamples(valFFT, samplesFFT); // note: valFFT is used as a int16_t buffer on C3 and S2, could optimize RAM use by only allocating half the size (but makes code harder to read)
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32)
+    // lamp fork：PCM 分接 → 本地完整管线（第二批 B）。float 样本域 ±32768，
+    // 截到 int16 写 SPSC ring；消费在 WLED loop（lamp_wled_fx.cpp）。
+    {
+      static int16_t tapBuf[samplesFFT];
+      for (int i = 0; i < samplesFFT; i++) {
+        float v = valFFT[i];
+        tapBuf[i] = (int16_t)((v > 32767.0f) ? 32767.0f : (v < -32767.0f ? -32767.0f : v));
+      }
+      lamp::pcmTap().write(tapBuf, samplesFFT);
+    }
+#endif
 
 #if defined(WLED_DEBUG) || defined(SR_DEBUG)
     if (start < esp_timer_get_time()) { // filter out overflows
