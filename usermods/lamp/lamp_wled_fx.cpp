@@ -200,6 +200,11 @@ struct LampBridge {
 LampBridge bridge;
 Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 
+// ── 临时崩溃插桩（定位「WS 切 ♪ 效果即 PANIC」）──
+// RTC noinit 段在 PANIC 重启后保留：崩溃时停留的最后标记 = 崩溃区间。
+// 定位完成后整段移除。
+RTC_NOINIT_ATTR uint32_t lampTrace;
+
 // ♪ Auto：lamp_auto 按音乐内容自动挑效果（f0 占比/音高抖动/打击度/频谱
 // 分裂度打分 + 滞回防抖）。状态全局一份 —— 多 segment 同跑 Auto 时同步换。
 AutoState  autoSt;
@@ -243,12 +248,15 @@ inline void rgb2hsv8(const Rgb &c, uint8_t &h, uint8_t &s, uint8_t &v) {
 }
 
 void modeLampCommon(FxId id) {
+  lampTrace = 1;
   bridge.fill(strip.now);
+  lampTrace = 2;
   if (!SEGENV.data) {
     if (!SEGENV.allocateData(sizeof(FxState))) return;  // 内存不足：本帧空过
     new (SEGENV.data) FxState();           // 默认成员值靠 placement-new 落位
   }
   FxState *st = reinterpret_cast<FxState*>(SEGENV.data);
+  lampTrace = 3;
 
   // ── 滑条接入（对齐原生效果惯例，per-segment）──
   // Speed → 时间缩放：128 = 设计默认，0 = 2 倍慢，255 = 2 倍快。
@@ -274,8 +282,10 @@ void modeLampCommon(FxId id) {
   }
 
   static const Geometry geo;               // 两管方向按默认（S1 左、首颗管底）
+  lampTrace = 4;
   // 白平衡关掉：WLED 自己有全局色彩处理，别叠两层
   fxRender(id, *st, cfg, f, geo, false, bridge.dtMs, fxOut);
+  lampTrace = 5;
   // 96 颗设计幅面 → 当前 segment 长度重采样（seg 恰为 96 时逐颗直映）。
   // 调色板融合：palette 0 (Default) 保持效果原生配色。选了调色板时分两型：
   //  · 空间多彩型（色相沿管本来就有行程）：hue → 调色板索引，形状与配色
@@ -310,17 +320,20 @@ void modeLampCommon(FxId id) {
       SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0));
     }
   }
+  lampTrace = 6;
 }
 
 // ♪ Auto：每帧先让选择器投票，再按它选中的效果渲染。
 // autoRetime 每帧必须调 —— 它设置特征平滑系数 a_feat；漏掉则 EMA 恒 0、
 // 评分全零，Auto 永远停在兜底效果不动（首版实际踩中）。
 void modeLampAuto() {
+  lampTrace = 0x10;
   static bool autoInited = false;
   bridge.fill(strip.now);
   if (!autoInited) { autoInit(autoSt, autoCfg, bridge.dtMs); autoInited = true; }
   autoRetime(autoSt, autoCfg, bridge.dtMs);
   autoUpdate(autoSt, autoCfg, bridge.frame, strip.now);
+  lampTrace = 0x11;
   modeLampCommon(autoSt.current);
 }
 static const char mLampAuto_data[] PROGMEM = "♪ Auto@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0";
@@ -359,6 +372,7 @@ LAMP_FX(mLampAurora,    FX_SLOW_AURORA,    "♪ Slow Aurora@Speed,Sensitivity,,,
 class LampFxUsermod : public Usermod {
   public:
     void setup() override {
+      if (esp_reset_reason() == ESP_RST_POWERON) lampTrace = 0;  // 上电随机值清零
       // ⚠️ 注册顺序 = ID 分配顺序（255 自动填洞）。新效果只许追加在**最后**，
       // 插前面会把既有 ♪ 效果的 ID 全部后移，用户已存预设集体指错效果。
       strip.addEffect(255, &mLampSpectrum,  mLampSpectrum_data);
@@ -413,6 +427,8 @@ class LampFxUsermod : public Usermod {
       JsonArray arr = user.createNestedArray(F("Lamp FX Data"));
       if (bridge.remoteFresh(millis())) arr.add(F("full (LAMP1)"));
       else arr.add(F("basic (bridge)"));
+      JsonArray tr = user.createNestedArray(F("Lamp trace"));
+      tr.add((int)lampTrace);
       // ♪ Auto 当前选中的效果 —— 「灯怎么在放这个」的第一排查入口
       JsonArray af = user.createNestedArray(F("Auto FX"));
       af.add(fxName(autoSt.current));
