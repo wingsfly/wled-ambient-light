@@ -312,9 +312,14 @@ void modeLampCommon(FxId id) {
   }
 }
 
-// ♪ Auto：每帧先让选择器投票，再按它选中的效果渲染
+// ♪ Auto：每帧先让选择器投票，再按它选中的效果渲染。
+// autoRetime 每帧必须调 —— 它设置特征平滑系数 a_feat；漏掉则 EMA 恒 0、
+// 评分全零，Auto 永远停在兜底效果不动（首版实际踩中）。
 void modeLampAuto() {
+  static bool autoInited = false;
   bridge.fill(strip.now);
+  if (!autoInited) { autoInit(autoSt, autoCfg, bridge.dtMs); autoInited = true; }
+  autoRetime(autoSt, autoCfg, bridge.dtMs);
   autoUpdate(autoSt, autoCfg, bridge.frame, strip.now);
   modeLampCommon(autoSt.current);
 }
@@ -408,6 +413,19 @@ class LampFxUsermod : public Usermod {
       JsonArray arr = user.createNestedArray(F("Lamp FX Data"));
       if (bridge.remoteFresh(millis())) arr.add(F("full (LAMP1)"));
       else arr.add(F("basic (bridge)"));
+      // 上次复位原因：排查「切换特效即重启」类问题的第一手证据 ——
+      // PANIC/WDT 指向固件 bug，BROWNOUT 指向供电跌落（换 J1 适配器供电）。
+      JsonArray rr = user.createNestedArray(F("Reset reason"));
+      switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:   rr.add(F("power-on"));  break;
+        case ESP_RST_SW:        rr.add(F("software"));  break;
+        case ESP_RST_PANIC:     rr.add(F("PANIC"));     break;
+        case ESP_RST_INT_WDT:   rr.add(F("INT WDT"));   break;
+        case ESP_RST_TASK_WDT:  rr.add(F("TASK WDT"));  break;
+        case ESP_RST_WDT:       rr.add(F("WDT"));       break;
+        case ESP_RST_BROWNOUT:  rr.add(F("BROWNOUT"));  break;
+        default:                rr.add((int)esp_reset_reason()); break;
+      }
     }
 
     uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }
