@@ -18,11 +18,14 @@
  */
 
 #include <new>
+#include <arduinoFFT.h>
 
 #include "lamp_fx.h"
 #include "lamp_beat.h"
 #include "lamp_onset.h"
 #include "lamp_auto.h"
+#include "lamp_pipeline.h"
+#include "lamp_pcm_tap.h"
 
 namespace {
 
@@ -61,6 +64,10 @@ struct __attribute__((packed)) LampSyncPacket {
   int32_t  bar_index;
 };
 static_assert(sizeof(LampSyncPacket) == 336, "LAMP1 包布局漂移，必须同步 sender");
+
+// 本地完整管线的输出（定义在下方「第二批 B」块；bridge.fill 按新鲜度取用）
+extern AudioFrame localFrame;
+extern uint32_t   localFrameMs;
 
 struct LampBridge {
   AudioFrame  frame;
@@ -116,6 +123,15 @@ struct LampBridge {
     lastMs = now;
 
     if (remoteFresh(now)) { fillFromRemote(); return; }
+
+    // 二级：本地完整管线（麦克风/3.5mm 有 PCM 时；100ms ≈ 4 帧新鲜窗）
+    if (localFrameMs && (now - localFrameMs) < 100) {
+      StylePreset p = localFrame.preset;
+      localFrame.preset_changed = p != prevPreset;
+      prevPreset = p;
+      frame = localFrame;
+      return;
+    }
 
     um_data_t *um = nullptr;
     if (!UsermodManager::getUMData(&um, USERMOD_ID_AUDIOREACTIVE)) {
@@ -205,10 +221,57 @@ Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 // 定位完成后整段移除。
 RTC_NOINIT_ATTR uint32_t lampTrace;
 
-// 第二批 B 可行性基准结论（2026-08-27 实测后移除代码）：完整管线
-// GENERAL 档（1024 FFT/hop 512）在 S3 上 pipelineProcess = 2928 µs/帧，
-// 加 FFT（arduinoFFT ~3ms，esp-dsp 更低）合计 ~6ms，帧预算 23.2ms 的 26%
-// —— 板上跑完整管线无需裁剪。HPSS/色度等重活在 16 频段域，天然嵌入式友好。
+// ── 第二批 B：本地完整管线（麦克风/3.5mm 独立场景）──
+// 可行性基准（2026-08-27 实测）：GENERAL 档 pipelineProcess = 2928 µs/帧，
+// 加 FFT 合计 ~6ms，帧预算 23.2ms 的 26% —— 无需裁剪。
+// PCM 由 audioreactive FFT task 分接（lamp_pcm_tap，SPSC ring），本函数在
+// WLED loop 消费：攒 hop=512 新样本 → lamp 窗 + arduinoFFT 1024 点 → 幅度谱
+// → pipelineProcess → 完整 AudioFrame（含真 HPSS/色度/音高/人声/自动档位）。
+// UDP receive 模式下 audioreactive 挂起本地采样 → ring 空 → 管线自然停，
+// 与 LAMP1 远端帧无缝互补。
+constexpr int      kLocalN   = 1024;            // GENERAL 档帧长
+constexpr int      kLocalHop = 512;
+Pipeline           localPipe;                    // ~10KB，bss
+PipelineConfig     localCfg;
+bool               localInited = false;
+float              localPcm[kLocalN];            // 滑动帧：前半 = 上帧后半
+int                localFill = 0;
+float              localRe[kLocalN], localIm[kLocalN], localMag[kLocalN / 2 + 1];
+AudioFrame         localFrame;
+uint32_t           localFrameMs = 0;             // 0 = 从未出帧
+ArduinoFFT<float>  localFFT(localRe, localIm, kLocalN, kSampleRate, true);
+
+void serviceLocalPipeline() {
+  if (!localInited) {
+    localInited = pipelineInit(localPipe, localCfg, STYLE_GENERAL);
+    if (!localInited) return;
+  }
+  auto &rb = pcmTap();
+  int16_t tmp[128];
+  for (;;) {
+    size_t want = (size_t)(kLocalN - localFill);
+    if (want > sizeof(tmp) / sizeof(tmp[0])) want = sizeof(tmp) / sizeof(tmp[0]);
+    size_t got = rb.read(tmp, want);
+    if (got == 0) break;
+    for (size_t i = 0; i < got; i++)
+      localPcm[localFill + i] = (float)tmp[i] / 32768.0f;   // liblamp 同款 ±1 域
+    localFill += got;
+    if (localFill < kLocalN) continue;
+
+    // 帧就绪：lamp 窗（Analysis.w，pipelineInit 已按档位填好）→ FFT → 幅度谱
+    for (int i = 0; i < kLocalN; i++) {
+      localRe[i] = localPcm[i] * localPipe.an.w[i];
+      localIm[i] = 0.0f;
+    }
+    localFFT.compute(FFTDirection::Forward);
+    localFFT.complexToMagnitude();               // 幅度就地写入 localRe[0..N/2]
+    for (int i = 0; i <= kLocalN / 2; i++) localMag[i] = localRe[i];
+    localFrame   = pipelineProcess(localPipe, localCfg, localPcm, localMag, millis());
+    localFrameMs = millis();
+    memmove(localPcm, localPcm + kLocalHop, (kLocalN - kLocalHop) * sizeof(float));
+    localFill = kLocalN - kLocalHop;
+  }
+}
 
 // ♪ Auto：lamp_auto 按音乐内容自动挑效果（f0 占比/音高抖动/打击度/频谱
 // 分裂度打分 + 滞回防抖）。状态全局一份 —— 多 segment 同跑 Auto 时同步换。
@@ -413,6 +476,7 @@ class LampFxUsermod : public Usermod {
     }
 
     void loop() override {
+      serviceLocalPipeline();          // 本地完整管线：有 PCM 就出帧，无则空转
       if (!udpOk) return;
       // 非阻塞 drain：一轮 loop 把积压的包全收掉，只留最新
       int len;
@@ -430,7 +494,9 @@ class LampFxUsermod : public Usermod {
       JsonObject user = root["u"];
       if (user.isNull()) user = root.createNestedObject("u");
       JsonArray arr = user.createNestedArray(F("Lamp FX Data"));
-      if (bridge.remoteFresh(millis())) arr.add(F("full (LAMP1)"));
+      uint32_t _n = millis();
+      if (bridge.remoteFresh(_n)) arr.add(F("full (LAMP1)"));
+      else if (localFrameMs && (_n - localFrameMs) < 100) arr.add(F("full (local)"));
       else arr.add(F("basic (bridge)"));
       JsonArray tr = user.createNestedArray(F("Lamp trace"));
       tr.add((int)lampTrace);
