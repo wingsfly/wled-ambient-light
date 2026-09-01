@@ -1,0 +1,5 @@
+{
+  "name": "mqtt_heartbeat",
+  "build": { "libArchive": false },
+  "dependencies": {}
+}
