@@ -528,11 +528,19 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
     DEBUG_PRINTF_P(PSTR("Preset direct: %d\n"), currentPreset);
   } else if (!root["ps"].isNull()) {
     // we have "ps" call (i.e. from button or external API call) or "pd" that includes "ps" (i.e. from UI call)
-    if (root["win"].isNull() && getVal(root["ps"], presetCycCurr, 1, 250) && presetCycCurr > 0 && presetCycCurr < 251 && presetCycCurr != currentPreset) {
-      DEBUG_PRINTF_P(PSTR("Preset select: %d\n"), presetCycCurr);
-      // b) preset ID only or preset that does not change state (use embedded cycling limits if they exist in getVal())
-      applyPreset(presetCycCurr, callMode); // async load from file system (only preset ID was specified)
-      return stateResponse;
+    if (root["win"].isNull() && getVal(root["ps"], presetCycCurr, 1, 250) && presetCycCurr > 0 && presetCycCurr < 251) {
+      if (presetCycCurr != currentPreset) {
+        DEBUG_PRINTF_P(PSTR("Preset select: %d\n"), presetCycCurr);
+        // b) preset ID only or preset that does not change state (use embedded cycling limits if they exist in getVal())
+        applyPreset(presetCycCurr, callMode); // async load from file system (only preset ID was specified)
+        return stateResponse;
+      }
+      // lamp fork：ps == 当前预设。典型场景：播放列表正轮播在这一项上，
+      // 用户选中它表达的是「就停在这」——上游在此直接忽略整个指令，
+      // 播放列表停不下来（选中项恰为当前项时无法单独指定预设）。
+      // 改为：至少卸载播放列表；状态本就是该预设内容，无需重新加载。
+      unloadPlaylist();
+      presetCycCurr = currentPreset;
     } else presetCycCurr = currentPreset; // restore presetCycCurr
   }
 
