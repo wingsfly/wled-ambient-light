@@ -230,8 +230,8 @@ def main():
         last_resolve = time.time()
         while True:
             time.sleep(2)
-            print("pkts=%d vol-peak=%.0f %s" % (stat["n"], stat["vol"], stat["rich"]), flush=True)
-            stat["n"] = 0; stat["vol"] = 0.0; stat["on"] = 0
+            print("pkts=%d on2s=%d vol=%.0f %s" % (stat["n"], stat.get("on", 0), stat["vol"], stat["rich"]), flush=True)
+            stat["n"] = 0; stat["vol"] = 0.0; stat["on"] = 0; stat["on"] = 0
             # 自愈：网络路径变化（ZT/WiFi 切换）后老 socket 会「活着但断路」——
             # 照常 sendto、板子颗粒无收（实测踩中，需手动重启才恢复）。
             # 每 2s 探测出口 IP，变化即重建；mDNS 每 60s 重解析防板子换 IP。
