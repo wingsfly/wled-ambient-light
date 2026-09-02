@@ -201,6 +201,7 @@ inline uint8_t fxGenres(FxId f) {
 struct FxState {
     float bar[NUM_BANDS] = {0};   // 每段的包络（split-bands 用）
     float impact = 0.0f;          // **整管**的冲击包络
+    float impact_cool = 0.0f;     // 注入冷却（ms）：同一击打的「回声 onset」只闪一次
     float hue    = 0.5f;          // 跟随频谱质心平滑移动的色相
     float chroma[kChroma] = {0};  // 平滑后的色度，直接画会闪
     float key_hue = 0.5f;         // 由调性决定的底色，换调时慢慢挪过去
@@ -386,7 +387,12 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // onset 是谱通量突变检测，与绝对电平解耦，压缩免疫。峰高由打击
     // 通道能量定、保底 0.55 让每次击打可见；无击打帧按拍衰向零。
     {
-        if (f.onset) {
+        // 注入冷却 120ms：检测器的不应期只有 60ms（通用语义，节拍统计需要），
+        // 而击打包络常拖到 150ms —— 余音再次超阈会发出同击的「回声 onset」，
+        // 衰减调快后表现为一个鼓点抖闪 3~4 次（实测）。冷却窗内回声走衰减。
+        st.impact_cool -= dt_ms;
+        if (st.impact_cool < 0.0f) st.impact_cool = 0.0f;
+        if (f.onset && st.impact_cool <= 0.0f) {
             float pe = 0.0f;
             for (int i = 0; i < NUM_BANDS; ++i) {
                 if (isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) pe += f.bands_p[i];
@@ -394,6 +400,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
             float e = pe * kFxBandScale * 0.6f + 0.55f;
             if (e > 1.0f) e = 1.0f;
             if (e > st.impact) st.impact = e;
+            st.impact_cool = 120.0f;
         } else {
             st.impact += a * (0.0f - st.impact);
         }
