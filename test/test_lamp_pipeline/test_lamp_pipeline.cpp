@@ -274,17 +274,20 @@ void test_effects_stay_within_the_pixel_range(void) {
 
 // ── 冲击效果：这一组是「跟得上 BPM」的全部要点 ────────────
 
-// 峰值必须**瞬时**跟上，不做任何平滑 —— 冲击峰的上升沿就是声音的上升沿。
+// 峰值必须**瞬时**跟上，不做任何平滑 —— 冲击峰的上升沿就是击打事件本身。
+// （2026-09-02 起冲击由 onset 事件注入：电平包络两条路都被现实击毙 ——
+//  绝对 rms 有 AGC 地板、瞬态分量被砖墙压缩抹平，见 lamp_fx.h 注释。）
 void test_impact_rises_instantly(void) {
     FxState st; FxConfig c;
     AudioFrame f;
     f.beat_locked = true; f.bpm = 120.0f;
     for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
-    f.rms_fast = 0.0f;
+    f.onset = false;
     fxAdvance(st, c, f, 23.22f);
     TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, st.impact);
 
-    f.rms_fast = 0.35f;                       // ×kFxLevelScale(3) ≈ 1.0
+    f.onset = true;                           // 击打事件 + 打击通道能量
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands_p[i] = 0.02f;
     fxAdvance(st, c, f, 23.22f);
     TEST_ASSERT_TRUE_MESSAGE(st.impact > 0.85f, "冲高没有立刻到位 —— 上升沿被平滑了");
 }
@@ -299,10 +302,11 @@ void test_impact_decay_scales_with_bpm(void) {
         FxState st; AudioFrame f;
         f.beat_locked = true; f.bpm = bpms[b];
         for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
-        f.rms_fast = 1.0f;
-        fxAdvance(st, c, f, 5.0f);            // 冲到顶
+        f.onset = true;
+        for (int i = 0; i < NUM_BANDS; ++i) f.bands_p[i] = 0.02f;
+        fxAdvance(st, c, f, 5.0f);            // 击打事件冲到顶
         TEST_ASSERT_TRUE(st.impact > 0.9f);
-        f.rms_fast = 0.0f;
+        f.onset = false;
         int steps = 0;
         while (st.impact > 0.5f && steps < 4000) { fxAdvance(st, c, f, 5.0f); ++steps; }
         halfLife[b] = steps * 5.0f;
@@ -322,10 +326,11 @@ void test_impact_falls_back_when_unlocked(void) {
     AudioFrame f;
     f.beat_locked = false; f.bpm = 0.0f;      // 未锁定，BPM 无意义
     for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
-    f.rms_fast = 1.0f;
+    f.onset = true;
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands_p[i] = 0.02f;
     fxAdvance(st, c, f, 10.0f);
     TEST_ASSERT_TRUE(st.impact > 0.9f);
-    f.rms_fast = 0.0f;
+    f.onset = false;
     for (int k = 0; k < 40; ++k) fxAdvance(st, c, f, 10.0f);   // 400ms
     TEST_ASSERT_TRUE_MESSAGE(st.impact < 0.3f, "未锁定时没有衰减");
     TEST_ASSERT_FALSE(isnan(st.impact));
@@ -406,11 +411,11 @@ void test_impact_is_not_a_spectrum_plot(void) {
 
     // 两帧总能量相同，但频谱形状完全相反
     AudioFrame lo, hi;
-    lo.rms_fast = hi.rms_fast = 0.25f;
-    lo.peak = hi.peak = 0.3f;
+    lo.onset = hi.onset = true;               // 同强度击打事件
     for (int i = 0; i < NUM_BANDS; ++i) {
-        lo.bands[i] = (i < 8) ? 0.5f : 0.0f;
+        lo.bands[i] = (i < 8) ? 0.5f : 0.0f;  // 频谱形状完全相反
         hi.bands[i] = (i < 8) ? 0.0f : 0.5f;
+        lo.bands_p[i] = hi.bands_p[i] = 0.02f;   // 打击能量相同
     }
     FxState sa, sb;
     for (int k = 0; k < 30; ++k) {            // 让色相收敛
@@ -427,7 +432,8 @@ void test_impact_is_not_a_spectrum_plot(void) {
         "点亮范围随频谱形状变了 —— 又画成频谱图了");
 
     // 反过来：整体响度变了，点亮范围必须跟着变
-    AudioFrame weak = lo; weak.rms_fast = 0.05f; weak.peak = 0.06f;
+    AudioFrame weak = lo;                     // 弱击打：有事件但打击能量为零（保底峰）
+    for (int i = 0; i < NUM_BANDS; ++i) weak.bands_p[i] = 0.0f;
     FxState sw;
     static Rgb w[TOTAL_LEDS];
     for (int k = 0; k < 30; ++k) fxRender(FX_BAR_IMPACT, sw, c, weak, g, false, 23.22f, w);
