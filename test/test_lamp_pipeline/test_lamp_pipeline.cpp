@@ -201,6 +201,7 @@ static AudioFrame liveFrame(void){
     // 而那是夹具旧了，不是效果坏了。加新特征时这里要一起补。
     f.dynamics=0.8f; f.beats_per_bar=4; f.bar_pos=0; f.bar_index=3;
     f.bar_conf=0.7f;
+    f.onset=true;    // 冲击效果改 onset 驱动（2026-09-02）后夹具必须带击打事件
     for (int i=0;i<NUM_BANDS;++i){ f.bands_h[i]=0.45f; f.bands_p[i]=0.25f; }
     f.percussive=0.35f;
     f.vocal=0.8f;
