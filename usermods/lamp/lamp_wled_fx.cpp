@@ -229,17 +229,20 @@ RTC_NOINIT_ATTR uint32_t lampTrace;
 // → pipelineProcess → 完整 AudioFrame（含真 HPSS/色度/音高/人声/自动档位）。
 // UDP receive 模式下 audioreactive 挂起本地采样 → ring 空 → 管线自然停，
 // 与 LAMP1 远端帧无缝互补。
-constexpr int      kLocalN   = 1024;            // GENERAL 档帧长
-constexpr int      kLocalHop = 512;
+constexpr int      kLocalMaxN = 2048;           // AMBIENT 档帧长（= kMaxFftLen）
 Pipeline           localPipe;                    // ~10KB，bss
 PipelineConfig     localCfg;
 bool               localInited = false;
-float              localPcm[kLocalN];            // 滑动帧：前半 = 上帧后半
+float              localPcm[kLocalMaxN];         // 滑动帧缓冲（按当前档位取前 n）
 int                localFill = 0;
-float              localRe[kLocalN], localIm[kLocalN], localMag[kLocalN / 2 + 1];
+float              localRe[kLocalMaxN], localIm[kLocalMaxN], localMag[kLocalMaxN / 2 + 1];
 AudioFrame         localFrame;
 uint32_t           localFrameMs = 0;             // 0 = 从未出帧
-ArduinoFFT<float>  localFFT(localRe, localIm, kLocalN, kSampleRate, true);
+// 档位动态切换（C 项）：pipelineProcess 内部换档时自动 pipelineRetime——
+// FFT 帧长随档位在 512/1024/2048 间变，三个实例绑同一缓冲按需选用。
+ArduinoFFT<float>  fft512 (localRe, localIm,  512, kSampleRate, true);
+ArduinoFFT<float>  fft1024(localRe, localIm, 1024, kSampleRate, true);
+ArduinoFFT<float>  fft2048(localRe, localIm, 2048, kSampleRate, true);
 
 void serviceLocalPipeline() {
   if (!localInited) {
@@ -249,28 +252,42 @@ void serviceLocalPipeline() {
   auto &rb = pcmTap();
   int16_t tmp[128];
   for (;;) {
-    size_t want = (size_t)(kLocalN - localFill);
+    // 帧长取管线现值 —— 档位刚在上一帧的 pipelineProcess 里切过就用新值。
+    const int n = (int)localPipe.an.n;
+    if (localFill > n) {
+      // 档位切小时只保留最近 n 个样本 —— capi 同款坑：size_t 减法下溢
+      // 会让后面的写越界（liblamp 实测 SIGBUS），这里先收缩再算 want。
+      memmove(localPcm, localPcm + (localFill - n), n * sizeof(float));
+      localFill = n;
+    }
+    size_t want = (size_t)(n - localFill);
     if (want > sizeof(tmp) / sizeof(tmp[0])) want = sizeof(tmp) / sizeof(tmp[0]);
-    size_t got = rb.read(tmp, want);
-    if (got == 0) break;
+    size_t got = want ? rb.read(tmp, want) : 0;
+    if (got == 0 && localFill < n) break;
     for (size_t i = 0; i < got; i++)
       localPcm[localFill + i] = (float)tmp[i] / 32768.0f;   // liblamp 同款 ±1 域
-    localFill += got;
-    if (localFill < kLocalN) continue;
+    localFill += (int)got;
+    if (localFill < n) continue;
 
-    // 帧就绪：lamp 窗（Analysis.w，pipelineInit 已按档位填好）→ FFT → 幅度谱
-    for (int i = 0; i < kLocalN; i++) {
+    // 帧就绪：lamp 窗（retime 已按档位填好）→ 对应尺寸 FFT → 幅度谱
+    for (int i = 0; i < n; i++) {
       localRe[i] = localPcm[i] * localPipe.an.w[i];
       localIm[i] = 0.0f;
     }
-    localFFT.compute(FFTDirection::Forward);
-    localFFT.complexToMagnitude();               // 幅度就地写入 localRe[0..N/2]
-    for (int i = 0; i <= kLocalN / 2; i++) localMag[i] = localRe[i];
+    ArduinoFFT<float> &F = (n == 512) ? fft512 : (n == 2048) ? fft2048 : fft1024;
+    F.compute(FFTDirection::Forward);
+    F.complexToMagnitude();                      // 幅度就地写入 localRe[0..n/2]
+    for (int i = 0; i <= n / 2; i++) localMag[i] = localRe[i];
     localFrame   = pipelineProcess(localPipe, localCfg, localPcm, localMag, millis());
     localFrameMs = millis();
-    memmove(localPcm, localPcm + kLocalHop, (kLocalN - kLocalHop) * sizeof(float));
-    localFill = kLocalN - kLocalHop;
+    // hop 取**当前**档位 —— 档位可能刚在 pipelineProcess 里换过，
+    // 用旧值会让时间轴慢慢漂（capi 注释同款）。
+    const int hop  = (int)presetParams(localPipe.style.current).hop;
+    const int keep = (localFill > hop) ? (localFill - hop) : 0;
+    if (keep) memmove(localPcm, localPcm + hop, (size_t)keep * sizeof(float));
+    localFill = keep;
   }
+}
 }
 
 // ♪ Auto：lamp_auto 按音乐内容自动挑效果（f0 占比/音高抖动/打击度/频谱
