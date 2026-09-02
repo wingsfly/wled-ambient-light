@@ -116,7 +116,6 @@ struct Pipeline {
     float         prev_chroma[kChroma] = {0};
     bool          has_prev_chroma = false;
     KeyEstimate   key;
-    float         key_chroma[kChroma] = {0};   // 调性估计专用的积分色度（~3s 窗）
     uint32_t      last_key_ms = 0;
     bool          key_dated = false;
     float         harmony = 0.0f;
@@ -172,7 +171,6 @@ inline bool pipelineInit(Pipeline &p, const PipelineConfig &c,
     for (int i = 0; i < kChroma; ++i) p.prev_chroma[i] = 0.0f;
     p.has_prev_chroma = false;
     p.key = KeyEstimate{}; p.last_key_ms = 0; p.key_dated = false; p.harmony = 0.0f;
-    for (int i = 0; i < kChroma; ++i) p.key_chroma[i] = 0.0f;
     return true;
 }
 
@@ -228,17 +226,8 @@ inline AudioFrame pipelineProcess(Pipeline &p, const PipelineConfig &c,
     p.has_prev_chroma = true;
     f.harmony_move = p.harmony;
 
-    // 调性估计喂**积分色度**而不是瞬时帧：琶音/独奏任一帧只有一两个音级在响，
-    // 单帧 KS 模板区分度趋零（合成 C 大调琶音实测 chroma 只见当刻单音、
-    // conf 0.16；古典乐 kconf 持续为 0）。3 秒窗把旋律「摊开」成和声画像。
-    // 瞬时 f.chroma 语义不变，灯效照旧消费。
-    {
-        const float kc = envCoeff(3000.0f, p.dt_ms);
-        for (int i = 0; i < kChroma; ++i)
-            p.key_chroma[i] += kc * (f.chroma[i] - p.key_chroma[i]);
-    }
     if (!p.key_dated || elapsedAtLeast(now_ms, p.last_key_ms, 1000)) {
-        p.key = estimateKey(p.key_chroma);
+        p.key = estimateKey(f.chroma);
         p.last_key_ms = now_ms;
         p.key_dated = true;
     }
