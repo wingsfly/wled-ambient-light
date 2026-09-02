@@ -234,6 +234,9 @@ Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 // 定位完成后整段移除。
 RTC_NOINIT_ATTR uint32_t lampTrace;
 
+// 临时诊断（onset 丢失定位）：收包置位次数 vs 渲染消费次数。定位后移除。
+uint32_t dbgOnsetRx = 0, dbgOnsetUse = 0;
+
 // ── 第二批 B：本地完整管线（麦克风/3.5mm 独立场景）──
 // 可行性基准（2026-08-27 实测）：GENERAL 档 pipelineProcess = 2928 µs/帧，
 // 加 FFT 合计 ~6ms，帧预算 23.2ms 的 26% —— 无需裁剪。
@@ -380,6 +383,7 @@ void modeLampCommon(FxId id) {
 
   static const Geometry geo;               // 两管方向按默认（S1 左、首颗管底）
   lampTrace = 4;
+  if (f.onset) dbgOnsetUse++;
   // 白平衡关掉：WLED 自己有全局色彩处理，别叠两层
   fxRender(id, *st, cfg, f, geo, false, bridge.dtMs, fxOut);
   lampTrace = 5;
@@ -550,6 +554,7 @@ class LampFxUsermod : public Usermod {
         if (memcmp(pkt.magic, "LAMP1", 5) != 0 || pkt.version != 1) continue;
         bridge.remote = pkt;
         bridge.pulseLatch |= pkt.flags & 0x35;   // onset|downbeat|section|vocal_onset
+        if (pkt.flags & 0x01) dbgOnsetRx++;
         bridge.remoteMs = millis();
       }
     }
@@ -564,6 +569,8 @@ class LampFxUsermod : public Usermod {
       else arr.add(F("basic (bridge)"));
       JsonArray tr = user.createNestedArray(F("Lamp trace"));
       tr.add((int)lampTrace);
+      JsonArray od = user.createNestedArray(F("Onset rx/use"));
+      od.add((int)dbgOnsetRx); od.add((int)dbgOnsetUse);
       // ♪ Auto 当前选中的效果 —— 「灯怎么在放这个」的第一排查入口
       JsonArray af = user.createNestedArray(F("Auto FX"));
       af.add(fxName(autoSt.current));
