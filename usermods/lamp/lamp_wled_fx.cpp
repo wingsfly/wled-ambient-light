@@ -518,6 +518,10 @@ class LampFxUsermod : public Usermod {
 
     void loop() override {
       serviceLocalPipeline();          // 本地完整管线：有 PCM 就出帧，无则空转
+      // 数据桥每轮保鲜（同 tick 幂等）：bridge.frame 原本只在 ♪ 效果渲染时
+      // 更新，跑原生效果时 /lampdata 与分析仪表拿到的是陈旧全零（实测踩中）。
+      // loop 与渲染同任务串行，无竞态；顺带让拍点/Auto 在任何效果下保持热身。
+      bridge.fill(strip.now);
       if (!udpOk) return;
       // 非阻塞 drain：一轮 loop 把积压的包全收掉，只留最新
       int len;
