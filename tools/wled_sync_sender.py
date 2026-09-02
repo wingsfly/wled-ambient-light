@@ -60,8 +60,8 @@ class LampFrameC(C.Structure):
                 ("auto_perc", C.c_float), ("auto_split", C.c_float),
                 ("px", C.c_uint8 * (NLED * 3))]
 
-LAMP1_FMT = "<6sBB48f12f20fbBBBi"       # 336B，与 LampSyncPacket 对应
-assert struct.calcsize(LAMP1_FMT) == 336
+LAMP1_FMT = "<6sBB48f12f20fbBBBifB"     # 341B v2（尾部 valence + emo_id），与 LampSyncPacket 对应
+assert struct.calcsize(LAMP1_FMT) == 341
 
 def find_device(sub, kind):
     for i, d in enumerate(sd.query_devices()):
@@ -89,7 +89,7 @@ def main():
     print("liblamp 就绪:", args.lib)
 
     # CLAP 状态（线程写、回调读——GIL 下标量读写安全）
-    clap = {"ready": False, "energy": None, "valence": 0.0, "label": "", "ring": np.zeros(22050 * 8, np.float32), "pos": 0, "lock": threading.Lock()}
+    clap = {"ready": False, "energy": None, "valence": 0.0, "label": "", "emo_id": 255, "ring": np.zeros(22050 * 8, np.float32), "pos": 0, "lock": threading.Lock()}
 
     def clap_worker():
         try:
@@ -121,7 +121,8 @@ def main():
             w = np.exp(sim * 25); w /= w.sum()
             clap["valence"] = float(sum(wi * a[1] for wi, a in zip(w, CLAP_ANCHORS)))
             clap["energy"] = float(sum(wi * a[2] for wi, a in zip(w, CLAP_ANCHORS)))
-            clap["label"] = CLAP_ANCHORS[int(np.argmax(w))][0].split()[0]
+            clap["emo_id"] = int(np.argmax(w))
+            clap["label"] = CLAP_ANCHORS[clap["emo_id"]][0].split()[0]
 
     if CLAP_AVAILABLE:
         threading.Thread(target=clap_worker, daemon=True).start()
@@ -184,7 +185,8 @@ def main():
                            f.f0, f.f0_conf, mood, f.trend, f.novelty, f.dynamics,
                            f.percussive, f.bar_conf, f.vocal,
                            max(-1, min(11, f.key_root)), max(0, min(255, f.preset)),
-                           f.bpb & 0xFF, f.bar_pos & 0xFF, f.bar_index)
+                           f.bpb & 0xFF, f.bar_pos & 0xFF, f.bar_index,
+                           clap["valence"], clap.get("emo_id", 255))
         # V2 兼容包：bands 按 kFxBandScale=6 反向（实测恰好满格）。
         # rms→vol 必须包络归一而不是固定系数：AGC 稳态随素材漂（实测
         # 0.03→0.12），固定系数会恒饱和 → 原生效果失去动态（实测踩中）。
