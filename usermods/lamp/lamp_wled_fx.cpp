@@ -85,6 +85,10 @@ struct LampBridge {
   float    dtMs = 20.0f;
 
   LampSyncPacket remote;       // 最近一个 LAMP1 包
+  uint8_t  pulseLatch = 0;     // 脉冲位锁存（onset/downbeat/section/vocal_onset）：
+                               // 包率 43~86Hz > 渲染 42fps，单帧脉冲按「最新包」
+                               // 采样会被后续 false 包覆盖 —— Beat It 实拍鼓点
+                               // 闪烁只剩 ~40/min（应 ~139）。OR 累积、消费即清。
   uint32_t remoteMs = 0;       // 收到时刻，0 = 从未收到
   StylePreset prevPreset = STYLE_GENERAL;
 
@@ -103,7 +107,7 @@ struct LampBridge {
     rmsSlow += (frame.rms_fast - rmsSlow) * (dtMs / 2000.0f);
     frame.rms_slow = rmsSlow;
     frame.peak = r.peak; frame.gain = r.gain;
-    frame.gated = r.flags & 0x08; frame.onset = r.flags & 0x01; frame.onset_rate = r.rate;
+    frame.gated = r.flags & 0x08; frame.onset = pulseLatch & 0x01; frame.onset_rate = r.rate;
     frame.bpm = r.bpm; frame.bpm_conf = r.conf;
     frame.beat_locked = r.flags & 0x02; frame.phase = r.phase;
     frame.centroid_hz = r.centroid; frame.flatness = r.flatness; frame.percussive = r.percussive;
@@ -111,13 +115,14 @@ struct LampBridge {
     frame.key_conf = r.key_conf; frame.harmony_move = r.harmony;
     frame.f0_hz = r.f0; frame.f0_conf = r.f0_conf; frame.f0_voiced = r.flags & 0x40;
     frame.energy_trend = r.trend; frame.section_novelty = r.novelty;
-    frame.section_change = r.flags & 0x10; frame.mood = r.mood; frame.dynamics = r.dynamics;
+    frame.section_change = pulseLatch & 0x10; frame.mood = r.mood; frame.dynamics = r.dynamics;
     frame.beats_per_bar = r.bpb; frame.bar_pos = r.bar_pos; frame.bar_index = r.bar_index;
-    frame.bar_conf = r.bar_conf; frame.downbeat = r.flags & 0x04;
-    frame.vocal = r.vocal; frame.vocal_onset = r.flags & 0x20;
+    frame.bar_conf = r.bar_conf; frame.downbeat = pulseLatch & 0x04;
+    frame.vocal = r.vocal; frame.vocal_onset = pulseLatch & 0x20;
     StylePreset p = r.preset < STYLE_COUNT ? (StylePreset)r.preset : STYLE_GENERAL;
     frame.preset_changed = p != prevPreset;
     frame.preset = prevPreset = p;
+    pulseLatch = 0;                          // 消费一次即清
   }
 
   void fill(uint32_t now) {
@@ -539,6 +544,7 @@ class LampFxUsermod : public Usermod {
         udp.read((uint8_t*)&pkt, len);
         if (memcmp(pkt.magic, "LAMP1", 5) != 0 || pkt.version != 1) continue;
         bridge.remote = pkt;
+        bridge.pulseLatch |= pkt.flags & 0x35;   // onset|downbeat|section|vocal_onset
         bridge.remoteMs = millis();
       }
     }
