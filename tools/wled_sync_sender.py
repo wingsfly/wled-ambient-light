@@ -8,9 +8,30 @@ BlackHole 采样（22050Hz，CoreAudio 自动重采样）→ liblamp（与固件
 包布局与 usermods/lamp/lamp_wled_fx.cpp 的 LampSyncPacket 逐字节对应，
 改一边必须同步另一边。AGC/静音门由 lamp 管线内建（gain/gated），不再自做。
 """
-import argparse, ctypes as C, socket, struct, sys, time
+import argparse, ctypes as C, socket, struct, sys, threading, time
 import numpy as np
 import sounddevice as sd
+
+# ── 第三批 3.1：CLAP 语义情绪（可选依赖，缺失自动降级） ──
+# 每 4 秒对最近 8 秒音频做零样本情绪推理（八锚点 valence×energy 加权），
+# 融合进 LAMP1 的 mood 字段（能量近似 → 语义增强）。零协议/零固件改动。
+try:
+    import laion_clap                    # noqa: F401 —— 延迟到线程里真正加载
+    CLAP_AVAILABLE = True
+except ImportError:
+    CLAP_AVAILABLE = False
+
+CLAP_ANCHORS = [
+    # (提示文本, valence 愉悦度 -1..1, energy 激活度 0..1)
+    ("aggressive intense heavy music",          -0.6, 1.0),
+    ("energetic happy dance music",              0.8, 0.9),
+    ("cheerful upbeat pop song",                 0.9, 0.6),
+    ("peaceful calm relaxing ambient music",     0.5, 0.1),
+    ("sad melancholic slow emotional music",    -0.8, 0.2),
+    ("dark tense ominous suspenseful music",    -0.7, 0.5),
+    ("romantic gentle warm acoustic music",      0.6, 0.3),
+    ("epic dramatic powerful orchestral music",  0.2, 0.8),
+]
 
 RATE = 22050            # kSampleRate（lamp_window.h），CoreAudio 自动重采样
 BLOCK = 1024
@@ -67,6 +88,46 @@ def main():
     lib.lamp_set_input_gain(h, args.gain)
     print("liblamp 就绪:", args.lib)
 
+    # CLAP 状态（线程写、回调读——GIL 下标量读写安全）
+    clap = {"ready": False, "energy": None, "valence": 0.0, "label": "", "ring": np.zeros(22050 * 8, np.float32), "pos": 0, "lock": threading.Lock()}
+
+    def clap_worker():
+        try:
+            m = laion_clap.CLAP_Module(enable_fusion=False)
+            m.load_ckpt()
+            temb = m.get_text_embedding([a[0] for a in CLAP_ANCHORS], use_tensor=False)
+            temb = temb / np.linalg.norm(temb, axis=1, keepdims=True)
+            clap["ready"] = True
+            print("CLAP 就绪", flush=True)
+        except Exception as e:
+            print("CLAP 加载失败，语义情绪降级停用:", type(e).__name__, flush=True)
+            return
+        while True:
+            time.sleep(4)
+            with clap["lock"]:
+                buf = np.concatenate([clap["ring"][clap["pos"]:], clap["ring"][:clap["pos"]]])
+            if float(np.sqrt((buf ** 2).mean())) < 1e-4:
+                clap["energy"] = None          # 静音期：不输出，mood 回归管线值
+                continue
+            # 22050 → 48000 线性重采样（CLAP 期望 48k）
+            x48 = np.interp(np.linspace(0, len(buf) - 1, int(len(buf) * 48000 / 22050)),
+                            np.arange(len(buf)), buf).astype(np.float32)
+            try:
+                aemb = m.get_audio_embedding_from_data(x=x48[None, :], use_tensor=False)
+            except Exception:
+                continue
+            aemb = aemb / np.linalg.norm(aemb, axis=1, keepdims=True)
+            sim = (aemb @ temb.T)[0]
+            w = np.exp(sim * 25); w /= w.sum()
+            clap["valence"] = float(sum(wi * a[1] for wi, a in zip(w, CLAP_ANCHORS)))
+            clap["energy"] = float(sum(wi * a[2] for wi, a in zip(w, CLAP_ANCHORS)))
+            clap["label"] = CLAP_ANCHORS[int(np.argmax(w))][0].split()[0]
+
+    if CLAP_AVAILABLE:
+        threading.Thread(target=clap_worker, daemon=True).start()
+    else:
+        print("laion_clap 未安装，语义情绪停用", flush=True)
+
     in_idx, in_name = find_device(args.input, "input")
     if in_idx is None:
         print("找不到输入设备:", args.input); sys.exit(1)
@@ -110,12 +171,17 @@ def main():
                  | (8 if f.gate else 0) | (16 if f.section else 0)
                  | (32 if f.vocal_onset else 0) | (64 if f.f0_voiced else 0)
                  | (128 if f.key_major else 0))
+        # CLAP 语义融合：mood = 管线能量近似 与 CLAP 激活度各半 —— 慢语义
+        # 修正快近似；CLAP 静音/未就绪时 mood 保持纯管线值。
+        mood = f.mood
+        if clap["energy"] is not None:
+            mood = 0.5 * f.mood + 0.5 * clap["energy"]
         floats48 = list(f.bands) + list(f.bands_h) + list(f.bands_p)
         pkt1 = struct.pack(LAMP1_FMT, b"LAMP1\0", 1, flags,
                            *floats48, *list(f.chroma),
                            f.rms, f.peak, f.gain, f.bpm, f.conf, f.phase, f.rate,
                            f.centroid, f.flatness, f.key_conf, f.harmony,
-                           f.f0, f.f0_conf, f.mood, f.trend, f.novelty, f.dynamics,
+                           f.f0, f.f0_conf, mood, f.trend, f.novelty, f.dynamics,
                            f.percussive, f.bar_conf, f.vocal,
                            max(-1, min(11, f.key_root)), max(0, min(255, f.preset)),
                            f.bpb & 0xFF, f.bar_pos & 0xFF, f.bar_index)
@@ -139,11 +205,19 @@ def main():
                 except OSError: pass
         stat["n"] += 1; stat["vol"] = max(stat["vol"], vol)
         stat["on"] = stat.get("on", 0) + (1 if f.onset else 0)
-        stat["rich"] = "rms=%.4f dyn=%.2f perc=%.2f onset/2s=%d phase=%.2f bmax=%.4f" % (
-            f.rms, f.dynamics, f.percussive, stat["on"], f.phase, max(f.bands))
+        stat["rich"] = "rms=%.4f mood=%.2f emo=%s(v%.1f,e%.2f) key=%d kc=%.2f" % (
+            f.rms, mood, clap["label"] or "-", clap["valence"],
+            clap["energy"] if clap["energy"] is not None else -1,
+            f.key_root, f.key_conf)
 
     def cb(indata, nframes, t, status):
         mono = np.ascontiguousarray(indata.mean(axis=1), dtype=np.float32)
+        with clap["lock"]:
+            r, pos = clap["ring"], clap["pos"]
+            n2 = min(len(mono), len(r) - pos)
+            r[pos:pos + n2] = mono[:n2]
+            if n2 < len(mono): r[:len(mono) - n2] = mono[n2:]
+            clap["pos"] = (pos + len(mono)) % len(r)
         n = lib.lamp_feed(h, mono.ctypes.data_as(C.POINTER(C.c_float)),
                           len(mono), frames, 8)
         for k in range(n): send_frame(frames[k])
