@@ -88,17 +88,25 @@ struct AgcConfig {
     float    gain_max   = 250.0f;
     float attack_ms  = 120.0f;     // 增益**下降**（信号变响）
     float release_ms = 6000.0f;    // 增益**上升**（信号变轻）
+    // 静音门重新开门后的快速重适应窗：刚经历过静音 = 大概率换了内容，
+    // 窗内增益上升也用 attack 速率。没有这条，「响歌 → 换轻歌」要按
+    // release 的 6s 时间常数爬 30~60s 才亮（实测踩中：换歌后灯黑约 1 分钟）。
+    // 歌内短暂安静不触发关门，不受影响 —— release 防泵浦的本职保留。
+    float refit_ms   = 3000.0f;
 };
 
 struct Agc {
     float gain    = 1.0f;          // 从 1.0 起步，不是从 gain_max
     bool  gated   = false;
     float a_attack = 0.0f, a_release = 0.0f;
+    float dt_ms = 23.2f;           // refit 窗倒计时用；agcRetime 更新
+    float refit_left_ms = 0.0f;    // >0 = 处于开门后的快速重适应窗
 };
 
 inline void agcRetime(Agc &g, const AgcConfig &c, float dt_ms) {
     g.a_attack  = envCoeff(c.attack_ms,  dt_ms);
     g.a_release = envCoeff(c.release_ms, dt_ms);
+    g.dt_ms     = dt_ms;
 }
 
 inline void agcInit(Agc &g, const AgcConfig &c, float dt_ms) {
@@ -122,7 +130,9 @@ inline float agcUpdate(Agc &g, const AgcConfig &c, float slow_rms) {
     // 负的 slow_rms 不需要单独夹零：负数小于任何非负 squelch，下面的门限必先拦下。
     // 即便 squelch 被配成负数，want 的夹取也会把负增益顶回 gain_min。
     const float close_at = c.squelch * c.gate_hyst;
-    if (g.gated) { if (slow_rms >= c.squelch) g.gated = false; }
+    if (g.gated) {
+        if (slow_rms >= c.squelch) { g.gated = false; g.refit_left_ms = c.refit_ms; }
+    }
     else         { if (slow_rms <  close_at)  g.gated = true;  }
     if (g.gated) return g.gain;
 
@@ -136,7 +146,9 @@ inline float agcUpdate(Agc &g, const AgcConfig &c, float slow_rms) {
     // want 已夹进 [min,max]，且系数 a∈[0,1]（envCoeff 的值域），
     // 于是这一步是 gain 与 want 的**凸组合** —— 结果必然仍在 [min,max] 内。
     // 事后不再夹一次：那层冗余保护会把 want 的夹取失效掩盖成「输出还是对的」。
-    g.gain += (want < g.gain ? g.a_attack : g.a_release) * (want - g.gain);
+    const bool refit = g.refit_left_ms > 0.0f;
+    if (refit) g.refit_left_ms -= g.dt_ms;
+    g.gain += (want < g.gain || refit ? g.a_attack : g.a_release) * (want - g.gain);
     return g.gain;
 }
 
