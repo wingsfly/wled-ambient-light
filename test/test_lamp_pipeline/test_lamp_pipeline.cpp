@@ -192,7 +192,7 @@ static AudioFrame liveFrame(void){
     AudioFrame f;
     for (int i=0;i<NUM_BANDS;++i) f.bands[i]=0.5f;
     for (int i=0;i<kChroma;++i)  f.chroma[i]=(i%4==0)?0.9f:0.15f;
-    f.rms_fast=0.4f; f.peak=0.6f; f.beat_locked=true; f.bpm=128.0f; f.phase=0.1f;
+    f.rms_fast=0.4f; f.rms_slow=0.25f; f.peak=0.6f; f.beat_locked=true; f.bpm=128.0f; f.phase=0.1f;
     f.key_root=0; f.key_conf=0.8f; f.centroid_hz=900.0f; f.harmony_move=0.1f;
     f.f0_hz=330.0f; f.f0_conf=0.8f; f.f0_voiced=true;
     f.mood=0.6f; f.energy_trend=0.3f; f.section_novelty=0.1f;
@@ -636,15 +636,20 @@ void test_harmony_smoothing_is_defined_in_physical_time(void) {
 
 // ── 彩色流动 / 旋律线：证明它们真的在消费 mood 与 f0 ──
 
-// 跑 n 帧后取平均色相跨度：管两端的色相差多少
+// 跑 n 帧后沿管累计相邻采样点的 RGB 变化 —— 色相跨度的代理。
+// 不能只比两端点：0.9 圈的端点绕色环几乎回到原地，端点差和 0.1 圈
+// 分不开，旧版实际是靠"静=低饱和"的饱和度差在过关；沿途路程不会被骗。
 static float hueSpread(FxState &st, const AudioFrame &f) {
     Geometry g; Rgb px[TOTAL_LEDS];
     for (int k = 0; k < 40; ++k) fxRender(FX_COLOR_FLOW, st, g_fxcfg, f, g, false, 23.22f, px);
-    const Rgb a = px[mapPixel(g, SIDE_L, 0.0f)];
-    const Rgb b = px[mapPixel(g, SIDE_L, 1.0f)];
-    // 用 RGB 差当色相差的代理 —— 同色相时三通道比例相同
-    const float da = fabsf((float)a.r - b.r) + fabsf((float)a.g - b.g) + fabsf((float)a.b - b.b);
-    return da;
+    float total = 0.0f;
+    Rgb prev = px[mapPixel(g, SIDE_L, 0.0f)];
+    for (int k = 1; k <= 16; ++k) {
+        const Rgb c = px[mapPixel(g, SIDE_L, (float)k / 16.0f)];
+        total += fabsf((float)c.r - prev.r) + fabsf((float)c.g - prev.g) + fabsf((float)c.b - prev.b);
+        prev = c;
+    }
+    return total;
 }
 
 void test_color_flow_hue_span_follows_the_mood(void) {
