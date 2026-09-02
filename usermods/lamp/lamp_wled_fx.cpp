@@ -489,6 +489,31 @@ class LampFxUsermod : public Usermod {
     void connected() override {
       udp.stop();
       udpOk = udp.begin(kLampSyncPort) != 0;
+      // ♪ 分析仪表数据端点（B 项）：主页仪表卡片 10Hz 轮询。~500B 紧凑 JSON。
+      // AsyncTCP 任务读 bridge.frame（loop 写）——纯展示用，float 撕裂无害。
+      if (!routeOk) {
+        server.on("/lampdata", HTTP_GET, [](AsyncWebServerRequest *request) {
+          const AudioFrame &f = bridge.frame;
+          char buf[640];
+          int n = snprintf(buf, sizeof(buf),
+            "{\"bands\":[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f],"
+            "\"chroma\":[%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f],"
+            "\"rms\":%.4f,\"bpm\":%.0f,\"conf\":%.2f,\"phase\":%.2f,\"lock\":%d,"
+            "\"key\":%d,\"maj\":%d,\"kconf\":%.2f,\"f0\":%.0f,\"voiced\":%d,"
+            "\"vocal\":%.2f,\"mood\":%.2f,\"perc\":%.2f,\"style\":%d,\"src\":%d}",
+            f.bands[0], f.bands[1], f.bands[2], f.bands[3], f.bands[4], f.bands[5], f.bands[6], f.bands[7],
+            f.bands[8], f.bands[9], f.bands[10], f.bands[11], f.bands[12], f.bands[13], f.bands[14], f.bands[15],
+            f.chroma[0], f.chroma[1], f.chroma[2], f.chroma[3], f.chroma[4], f.chroma[5],
+            f.chroma[6], f.chroma[7], f.chroma[8], f.chroma[9], f.chroma[10], f.chroma[11],
+            f.rms_fast, f.bpm, f.bpm_conf, f.phase, f.beat_locked ? 1 : 0,
+            f.key_root, f.key_is_major ? 1 : 0, f.key_conf, f.f0_hz, f.f0_voiced ? 1 : 0,
+            f.vocal, f.mood, f.percussive, (int)f.preset,
+            bridge.remoteFresh(millis()) ? 2 : ((localFrameMs && millis() - localFrameMs < 100) ? 1 : 0));
+          if (n > 0 && n < (int)sizeof(buf)) request->send(200, "application/json", buf);
+          else request->send(500);
+        });
+        routeOk = true;
+      }
     }
 
     void loop() override {
@@ -539,6 +564,7 @@ class LampFxUsermod : public Usermod {
   private:
     WiFiUDP udp;
     bool udpOk = false;
+    bool routeOk = false;
     static BeatTracker &bridgeBeatRef() { return bridge.beat; }
 };
 
