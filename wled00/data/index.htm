@@ -502,6 +502,7 @@ var KEY="lampVizShow", timer=null;
 var NOTE=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 var STYLE=["AMBIENT","GENERAL","EDM","PERCUSSIVE"];
 var SRC=["bridge","local","LAMP1"];
+var EMO=["激烈","活力","欢快","平静","悲伤","暗黑","浪漫","史诗"];
 function el(i){return document.getElementById(i);}
 function build(){
   var host=el("Effects");
@@ -541,7 +542,9 @@ function draw(d){
   el("lvTxt").innerHTML=
     "BPM <b>"+(d.lock?d.bpm:"–")+"</b> · 调性 <b>"+key+"</b> · 人声 <b>"+Math.round(d.vocal*100)+"%</b>"+
     " · 打击 <b>"+Math.round(d.perc*100)+"%</b> · 情绪 <b>"+Math.round(d.mood*100)+"%</b>"+
-    " · 档位 <b>"+(STYLE[d.style]||d.style)+"</b> · 源 <b>"+(SRC[d.src]||d.src)+"</b>";
+    " · 档位 <b>"+(STYLE[d.style]||d.style)+"</b> · 源 <b>"+(SRC[d.src]||d.src)+"</b>"+
+    (d.emo !== undefined && d.emo < 8 ?
+      " · 语义 <b>"+EMO[d.emo]+"</b>（愉悦 "+(d.val>0?"+":"")+d.val.toFixed(1)+"）" : "");
 }
 function tick(){
   fetch(getURL("/lampdata")).then(function(r){return r.json();}).then(draw).catch(function(){});

@@ -62,8 +62,12 @@ struct __attribute__((packed)) LampSyncPacket {
   uint8_t  bpb;
   uint8_t  bar_pos;
   int32_t  bar_index;
+  // ── v2 追加（2026-09-06）：CLAP 语义情绪 ──
+  float    valence;         // 愉悦度 -1..1
+  uint8_t  emo_id;          // 八锚点 argmax；255 = CLAP 未就绪/旧包
 };
-static_assert(sizeof(LampSyncPacket) == 336, "LAMP1 包布局漂移，必须同步 sender");
+static_assert(sizeof(LampSyncPacket) == 341, "LAMP1 包布局漂移，必须同步 sender");
+constexpr int kLampSyncV1Len = 336;   // 旧 sender 兼容
 
 // 本地完整管线的输出（定义在下方「第二批 B」块；bridge.fill 按新鲜度取用）
 extern AudioFrame localFrame;
@@ -500,7 +504,8 @@ class LampFxUsermod : public Usermod {
             "\"chroma\":[%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f],"
             "\"rms\":%.4f,\"bpm\":%.0f,\"conf\":%.2f,\"phase\":%.2f,\"lock\":%d,"
             "\"key\":%d,\"maj\":%d,\"kconf\":%.2f,\"f0\":%.0f,\"voiced\":%d,"
-            "\"vocal\":%.2f,\"mood\":%.2f,\"perc\":%.2f,\"style\":%d,\"src\":%d}",
+            "\"vocal\":%.2f,\"mood\":%.2f,\"perc\":%.2f,\"style\":%d,\"src\":%d,"
+            "\"val\":%.2f,\"emo\":%d}",
             f.bands[0], f.bands[1], f.bands[2], f.bands[3], f.bands[4], f.bands[5], f.bands[6], f.bands[7],
             f.bands[8], f.bands[9], f.bands[10], f.bands[11], f.bands[12], f.bands[13], f.bands[14], f.bands[15],
             f.chroma[0], f.chroma[1], f.chroma[2], f.chroma[3], f.chroma[4], f.chroma[5],
@@ -508,7 +513,9 @@ class LampFxUsermod : public Usermod {
             f.rms_fast, f.bpm, f.bpm_conf, f.phase, f.beat_locked ? 1 : 0,
             f.key_root, f.key_is_major ? 1 : 0, f.key_conf, f.f0_hz, f.f0_voiced ? 1 : 0,
             f.vocal, f.mood, f.percussive, (int)f.preset,
-            bridge.remoteFresh(millis()) ? 2 : ((localFrameMs && millis() - localFrameMs < 100) ? 1 : 0));
+            bridge.remoteFresh(millis()) ? 2 : ((localFrameMs && millis() - localFrameMs < 100) ? 1 : 0),
+            bridge.remoteFresh(millis()) ? bridge.remote.valence : 0.0f,
+            bridge.remoteFresh(millis()) ? (int)bridge.remote.emo_id : 255);
           if (n > 0 && n < (int)sizeof(buf)) request->send(200, "application/json", buf);
           else request->send(500);
         });
@@ -526,9 +533,10 @@ class LampFxUsermod : public Usermod {
       // 非阻塞 drain：一轮 loop 把积压的包全收掉，只留最新
       int len;
       while ((len = udp.parsePacket()) > 0) {
-        if (len != (int)sizeof(LampSyncPacket)) { udp.flush(); continue; }
+        if (len != (int)sizeof(LampSyncPacket) && len != kLampSyncV1Len) { udp.flush(); continue; }
         LampSyncPacket pkt;
-        udp.read((uint8_t*)&pkt, sizeof(pkt));
+        pkt.valence = 0.0f; pkt.emo_id = 255;      // v1 包缺省
+        udp.read((uint8_t*)&pkt, len);
         if (memcmp(pkt.magic, "LAMP1", 5) != 0 || pkt.version != 1) continue;
         bridge.remote = pkt;
         bridge.remoteMs = millis();
