@@ -505,7 +505,7 @@ var SRC=["bridge","local","LAMP1"];
 var EMO=["激烈","活力","欢快","平静","悲伤","暗黑","浪漫","史诗"];
 function el(i){return document.getElementById(i);}
 function build(){
-  var host=el("Effects");
+  var host=el("Segments");
   if(!host)return;
   var d=document.createElement("div");
   d.innerHTML='<div id="lvHead" style="cursor:pointer;margin:10px 2px 4px;font-size:14px;opacity:.85;">♪ <span>Analyzer</span> <span id="lvArrow">▸</span></div>'+
@@ -576,17 +576,13 @@ function tick(){
   var fx=(typeof selectedFx!=="undefined")?selectedFx:-1;
   if(fx===lastFx)return;
   lastFx=fx;
-  var name=null;
-  try{
-    var lst=document.querySelectorAll("#fxlist .lstI .lstIname");
-    for(var i=0;i<lst.length;i++){}
-  }catch(e){}
-  // 用 fxdata 无名——直接从效果列表 DOM 取选中名
   var sel=document.querySelector("#fxlist .lstI.selected .lstIname");
   var nm=sel?sel.textContent.trim():"";
-  var doc=DOCS[nm];
+  // WLED 在名字后拼调色板/音频小图标，精确匹配必失败 —— 前缀匹配
+  var doc=null, key=null;
+  for(var k in DOCS){ if(nm.indexOf(k)===0){doc=DOCS[k];key=k;break;} }
   if(!doc){box.style.display="none";return;}
-  var h="<b>"+nm+"</b>";
+  var h="<b>"+key+"</b>";
   for(var j=0;j<5;j++)h+="<br><span style=\"opacity:.6\">"+LBL[j]+"</span>　"+doc[j];
   box.innerHTML=h;
   box.style.display="";
