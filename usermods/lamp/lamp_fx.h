@@ -833,7 +833,10 @@ inline void fxBarLadder(const FxState &st, const AudioFrame &f,
     if (n < 2) n = 4;
     if (n > 8) n = 8;
     const int pos = (f.bar_pos >= 0 && f.bar_pos < n) ? f.bar_pos : 0;
-    const float lvl = perceptual(f.rms_fast * kFxLevelScale);
+    // 亮度基线走慢包络（×2.5 补偿打击乐的低占空比）——结构显示要稳：
+    // rms_fast 在鼓点间隙和休止拍归零，阶梯会跟着音量扑闪，"第几拍"读不出来。
+    // 快包络只留少量，让击打有一口呼吸。
+    const float lvl = perceptual(clamp01((f.rms_slow * 2.5f + f.rms_fast * 0.6f) * kFxLevelScale));
     if (lvl <= 0.0f) return;
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
