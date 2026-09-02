@@ -547,8 +547,10 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
         float k = 0.0f, sn = 0.0f;
         for (int i = 0; i < 4; ++i) k += f.bands_p[i];
         for (int i = NUM_BANDS - 6; i < NUM_BANDS; ++i) sn += f.bands_p[i];
-        k = clamp01(k * kFxBandScale / 4.0f);
-        sn = clamp01(sn * kFxBandScale / 6.0f);
+        // 除以段数会稀释：鼓的能量集中在一两段里，取平均等于把幅度压到
+        // 1/4，再过 perceptual 平方就又短又暗（像素探针实测整小节漏检）。
+        k = clamp01(k * kFxBandScale / 2.0f);
+        sn = clamp01(sn * kFxBandScale / 3.0f);
         if (k > st.kick)   st.kick = k;   else st.kick  += ad * (k - st.kick);
         if (sn > st.snare) st.snare = sn; else st.snare += ad * (sn - st.snare);
     }
