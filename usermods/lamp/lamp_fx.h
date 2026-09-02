@@ -375,18 +375,25 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // 这个画的是「一次击打有多重」—— 一个标量，铺满整根管。
     //
     // 峰值高度由声音决定（冲高瞬时），落下去的快慢由节拍决定（衰减跟拍周期）。
-    // 用 rms_fast 而不是 peak：peak 自己就带保持衰减，套两层会拖成一片糊。
     //
-    // 输入取**瞬态分量**（快包络超出慢均线的部分），不是绝对 rms —— AGC 把
-    // rms 归一到 ~0.25 后，绝对值的「地板」有 0.5×kFxLevelScale 高，冲击衰
-    // 不到暗，「闪亮后快速衰减」退化成常亮小波动（鼓点乐实测踩中）。
-    // 瞬态在鼓击时冲高、间隙自然归零，击打感才成立。
+    // 冲击由 **onset 事件**注入，不是电平包络 —— 两条路都试死过：
+    //   绝对 rms：AGC 归一后地板 ~0.5，衰不到暗（常亮微波动）；
+    //   瞬态分量 (fast-slow)：现代流行的砖墙压缩让快慢包络几乎重合，
+    //   趋零（Beat It 实拍：整管恒亮 ±0.3%、只剩底部 reach 微亮）。
+    // onset 是谱通量突变检测，与绝对电平解耦，压缩免疫。峰高由打击
+    // 通道能量定、保底 0.55 让每次击打可见；无击打帧按拍衰向零。
     {
-        float e = (f.rms_fast - f.rms_slow) * 6.0f;
-        if (!isfinite(e) || e < 0.0f) e = 0.0f;
-        if (e > 1.0f) e = 1.0f;
-        if (e > st.impact) st.impact = e;
-        else               st.impact += a * (e - st.impact);
+        if (f.onset) {
+            float pe = 0.0f;
+            for (int i = 0; i < NUM_BANDS; ++i) {
+                if (isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) pe += f.bands_p[i];
+            }
+            float e = pe * kFxBandScale * 0.6f + 0.55f;
+            if (e > 1.0f) e = 1.0f;
+            if (e > st.impact) st.impact = e;
+        } else {
+            st.impact += a * (0.0f - st.impact);
+        }
     }
 
     // 色相跟频谱质心走：低沉的击打偏暖、明亮的偏冷。
