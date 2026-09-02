@@ -759,9 +759,13 @@ inline void fxColorFlow(const FxState &st, const AudioFrame &f,
     float mo = isfinite(f.mood) ? f.mood : 0.0f;
     if (mo < 0.0f) mo = 0.0f; if (mo > 1.0f) mo = 1.0f;
     const float span = 0.10f + 0.80f * mo;      // 色相跨度
-    const float sat  = 0.45f + 0.50f * mo;
+    // 底饱和 0.75 起步：WS2812 上 S<0.6 已经发粉白，"鲜艳"是这个效果的脸面，
+    // 静躁之分交给色相跨度去讲。
+    const float sat  = 0.75f + 0.25f * mo;
 
-    float lvl = f.rms_fast * kFxLevelScale;
+    // 亮度基线走慢包络，快包络只留呼吸。"正比于电平"的约束仍成立：
+    // 静音时慢快包络双双归零，整管照样熄灭。
+    float lvl = (f.rms_slow * 2.0f + f.rms_fast * 0.5f) * kFxLevelScale;
     if (!isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
     if (lvl > 1.0f) lvl = 1.0f;
 
@@ -775,7 +779,7 @@ inline void fxColorFlow(const FxState &st, const AudioFrame &f,
             const float h = base + st.flow + span * u;
             // 亮度必须**正比于**电平，不能带常数下限 —— 带下限的话静音时
             // 整条管还亮着 0.30，「没声音就熄灯」这条验收直接不过。
-            const float v = lvl * (0.5f + 0.5f * lvl) * (0.85f + 0.15f * sinf(6.28318f * u));
+            const float v = lvl * (0.6f + 0.4f * lvl) * (0.85f + 0.15f * sinf(6.28318f * u));
             out[mapPixel(g, (Side)s, u)] =
                 hsv(h, sat * (1.0f - 0.7f * st.sect), v + 0.6f * st.sect * (1.0f - v));
         }
