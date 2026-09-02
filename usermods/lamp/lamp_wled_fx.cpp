@@ -288,7 +288,6 @@ void serviceLocalPipeline() {
     localFill = keep;
   }
 }
-}
 
 // ♪ Auto：lamp_auto 按音乐内容自动挑效果（f0 占比/音高抖动/打击度/频谱
 // 分裂度打分 + 滞回防抖）。状态全局一份 —— 多 segment 同跑 Auto 时同步换。
