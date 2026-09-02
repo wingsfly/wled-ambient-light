@@ -333,7 +333,7 @@ inline void rgb2hsv8(const Rgb &c, uint8_t &h, uint8_t &s, uint8_t &v) {
 
 void modeLampCommon(FxId id) {
   lampTrace = 1;
-  bridge.fill(strip.now);
+  bridge.fill(millis());
   lampTrace = 2;
   if (!SEGENV.data) {
     if (!SEGENV.allocateData(sizeof(FxState))) return;  // 内存不足：本帧空过
@@ -380,7 +380,7 @@ void modeLampCommon(FxId id) {
   //    调色板上漂移。
   // 低饱和像素（白闪、灰）两型都不映射，冲击感的白不被染色。
   const bool usePal = SEGMENT.palette != 0;
-  const bool posMap = fxPaletteByPosition(id, bridge.remoteFresh(strip.now));
+  const bool posMap = fxPaletteByPosition(id, bridge.remoteFresh(millis()));
   // mirror 兼容：seg 开镜像时 vLength 已折半，只采左管（S1=[0,47]）交引擎
   // 镜像出右半 —— 对称类效果视觉不变，与原生效果的 mirror 语义统一。
   const unsigned span = SEGMENT.mirror ? LEDS_PER_TUBE : TOTAL_LEDS;
@@ -413,10 +413,10 @@ void modeLampCommon(FxId id) {
 void modeLampAuto() {
   lampTrace = 0x10;
   static bool autoInited = false;
-  bridge.fill(strip.now);
+  bridge.fill(millis());
   if (!autoInited) { autoInit(autoSt, autoCfg, bridge.dtMs); autoInited = true; }
   autoRetime(autoSt, autoCfg, bridge.dtMs);
-  autoUpdate(autoSt, autoCfg, bridge.frame, strip.now);
+  autoUpdate(autoSt, autoCfg, bridge.frame, millis());
   lampTrace = 0x11;
   modeLampCommon(autoSt.current);
 }
@@ -521,7 +521,7 @@ class LampFxUsermod : public Usermod {
       // 数据桥每轮保鲜（同 tick 幂等）：bridge.frame 原本只在 ♪ 效果渲染时
       // 更新，跑原生效果时 /lampdata 与分析仪表拿到的是陈旧全零（实测踩中）。
       // loop 与渲染同任务串行，无竞态；顺带让拍点/Auto 在任何效果下保持热身。
-      bridge.fill(strip.now);
+      bridge.fill(millis());
       if (!udpOk) return;
       // 非阻塞 drain：一轮 loop 把积压的包全收掉，只留最新
       int len;
