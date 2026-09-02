@@ -526,9 +526,18 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     {
         const float ab = envCoeff(beat_any * c.bloom_beats, dt_ms);
         const float ar = envCoeff(beat_any * c.ripple_beats, dt_ms);
-        if (f.downbeat && lvl > 0.0f) st.bloom = lvl;
+        // 注入不能用 rms_fast：downbeat/onset 脉冲踩在击打前沿，30ms 包络
+        // 还没爬起来，注入 0.1-0.3 再经 perceptual 平方就是全黑（探针实测
+        // 均值亮度 0.4%）。对齐冲击柱定稿：打击路能量 + 保底。
+        float pe = 0.0f;
+        for (int i = 0; i < NUM_BANDS; ++i) {
+            if (isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) pe += f.bands_p[i];
+        }
+        float hit = pe * kFxBandScale * 0.6f + 0.55f;
+        if (hit > 1.0f) hit = 1.0f;
+        if (f.downbeat && lvl > 0.0f) st.bloom = hit;
         else st.bloom += ab * (0.0f - st.bloom);
-        if (f.onset && !f.downbeat && lvl > 0.0f) { if (lvl > st.ripple) st.ripple = lvl; }
+        if (f.onset && !f.downbeat && lvl > 0.0f) { if (hit > st.ripple) st.ripple = hit; }
         else st.ripple += ar * (0.0f - st.ripple);
     }
 
