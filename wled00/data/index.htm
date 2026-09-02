@@ -608,6 +608,44 @@ function tick(){
   place();
 }
 setInterval(tick,500);
+/* ── ♪ 效果分类筛选 + 调色板列表内滚 ─────────────────────
+   分类与板端 lamp_fx.h 的 TAG 位一一对应（B=节奏 S=频谱 M=旋律 V=人声 D=氛围）。
+   调色板列表限高独立滚动：挑调色板时上方色轮/亮度/色温常驻可见。 */
+var LCAT={"♪ Spectrum Bars":"S","♪ Beat Pulse":"B","♪ Level Sweep":"D","♪ Bar Impact":"B","♪ Beat Runner":"B","♪ Split Bands":"S","♪ Key Wash":"M","♪ Chroma Ring":"M","♪ Color Flow":"DM","♪ Melody Line":"M","♪ Downbeat Bloom":"B","♪ Bar Ladder":"B","♪ Kick & Snare":"BS","♪ Pitch Comet":"M","♪ Harmony Shift":"M","♪ Vocal Halo":"VM","♪ Vocal Breath":"V","♪ Formant Ribbon":"VS","♪ Duet Split":"VS","♪ Lyric Pulse":"VB","♪ Section Tide":"D","♪ Mood Gradient":"D","♪ Slow Aurora":"D","♪ Auto":"BSMVD"};
+var CATS=[["全部",""],["节奏","B"],["频谱","S"],["旋律","M"],["人声","V"],["氛围","D"]];
+var curCat="";
+var lampCss=document.createElement("style");
+lampCss.textContent="#pallist{max-height:44vh;overflow-y:auto;overscroll-behavior:contain}"+
+ "#lampFlt{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;padding:4px 2px 6px}"+
+ "#lampFlt span{padding:2px 12px;border:1px solid var(--c-3,#555);border-radius:14px;cursor:pointer;font-size:13px;color:var(--c-d,#bbb)}"+
+ "#lampFlt span.on{background:var(--c-3,#555);color:var(--c-f,#fff);border-color:var(--c-6,#888)}";
+document.head.appendChild(lampCss);
+function applyFlt(){
+  document.querySelectorAll("#fxlist .lstI").forEach(function(it){
+    if(!curCat){it.style.display="";return;}
+    var nmEl=it.querySelector(".lstIname"); var nm=nmEl?nmEl.textContent.trim():"";
+    var hit=null;
+    for(var k in LCAT){ if(nm.indexOf(k)===0){hit=LCAT[k];break;} }
+    it.style.display=(hit&&hit.indexOf(curCat)>=0)?"":"none";
+  });
+}
+function buildFlt(){
+  var fnd=document.getElementById("fxFind");
+  if(!fnd||document.getElementById("lampFlt"))return;
+  var d=document.createElement("div"); d.id="lampFlt";
+  CATS.forEach(function(c){
+    var s=document.createElement("span"); s.textContent=c[0]; s.dataset.c=c[1];
+    if(c[1]===curCat)s.className="on";
+    s.onclick=function(){
+      curCat=(curCat===c[1])?"":c[1];
+      d.querySelectorAll("span").forEach(function(x){x.classList.toggle("on",x.dataset.c===curCat);});
+      applyFlt();
+    };
+    d.appendChild(s);
+  });
+  fnd.parentNode.insertBefore(d,fnd.nextSibling);
+}
+setInterval(function(){buildFlt();if(curCat)applyFlt();},600);
 window.addEventListener("scroll",place,true);
 window.addEventListener("resize",place);
 })();
