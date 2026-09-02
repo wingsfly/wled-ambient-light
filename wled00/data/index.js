@@ -8,6 +8,16 @@ var segLmax = 0; // size (in pixels) of largest selected segment
 var selectedFx = 0;
 var selectedPal = 0;
 var csel = 0; // selected color slot (0-2)
+// 色槽按钮显示本地化全名，不用数字或两字母缩写；效果自定义的槽名（少数）原样显示
+var SLOT_NAMES = {
+	zh: {Fx:"前景色", Bg:"背景色", Cs:"点缀色"},
+	en: {Fx:"Primary", Bg:"Background", Cs:"Accent"}
+};
+function slotName(i, raw) {
+	var lang = (navigator.language||"en").toLowerCase().indexOf("zh")==0 ? "zh" : "en";
+	var key = (raw=="!" || raw=="") ? ["Fx","Bg","Cs"][i] : raw;
+	return SLOT_NAMES[lang][key] || raw;
+}
 var cpick; // iro color picker
 var currentPreset = -1;
 var lastUpdate = 0;
@@ -1675,8 +1685,6 @@ function setEffectParameters(idx)
 	setSelectedEffectPosition();
 	setInterval(setSelectedEffectPosition,750);
 	// set html color items on/off
-	var cslLabel = '';
-	var sep = '';
 	var cslCnt = 0, oCsel = csel;
 	d.querySelectorAll("#csl button").forEach((e,i)=>{
 		var btn = gId("csl" + i);
@@ -1684,34 +1692,23 @@ function setEffectParameters(idx)
 		if (coOnOff.length>i && coOnOff[i] != "") {
 			btn.classList.remove('hide');
 			btn.dataset.hide = 0;
-			if (coOnOff[i] != "!") {
-				var abbreviation = coOnOff[i].substr(0,2);
-				btn.innerHTML = abbreviation;
-				if (abbreviation != coOnOff[i]) {
-					cslLabel += sep + abbreviation + '=' + coOnOff[i];
-					sep = ', ';
-				}
-			}
-			else if (i==0) btn.innerHTML = "Fx";
-			else if (i==1) btn.innerHTML = "Bg";
-			else btn.innerHTML = "Cs";
+			btn.innerHTML = slotName(i, coOnOff[i]);
 			if (!cslCnt || oCsel==i) selectSlot(i); // select 1st displayed slot or old one
 			cslCnt++;
 		} else if (!controlDefined) { // if no controls then all buttons should be shown for color 1..3
 			btn.classList.remove('hide');
 			btn.dataset.hide = 0;
-			btn.innerHTML = `${i+1}`;
+			btn.innerHTML = slotName(i, "!");
 			if (!cslCnt || oCsel==i) selectSlot(i); // select 1st displayed slot or old one
 			cslCnt++;
 		} else {
 			btn.classList.add('hide');
 			btn.dataset.hide = 1;
-			btn.innerHTML = `${i+1}`; // name hidden buttons 1..3 for * palettes
+			btn.innerHTML = slotName(i, "!");
 		}
 	});
-	gId("cslLabel").innerHTML = cslLabel;
-	if (cslLabel!=="") gId("cslLabel").classList.remove("hide");
-	else               gId("cslLabel").classList.add("hide");
+	gId("cslLabel").innerHTML = "";
+	gId("cslLabel").classList.add("hide");
 
 	// set palette on/off
 	var palw = gId("palw"); // wrapper
