@@ -850,8 +850,12 @@ inline void fxBarLadder(const FxState &st, const AudioFrame &f,
             const int seg = (int)(u * n);
             Rgb c{0, 0, 0};
             if (seg <= pos) {
-                // 已经走过的段留一层暗底，当前段全亮 —— 这样能看出走到哪
-                const float v = (seg == pos) ? lvl : lvl * 0.22f;
+                // 已经走过的段留一层暗底，当前段全亮 —— 这样能看出走到哪。
+                // 暗底不能只乘系数：lvl 已经过 perceptual 平方，×0.22 只剩
+                // 6% 亮度，乳白外壳下阶梯直接断裂（像素探针实测只见单格跳）。
+                float dim = lvl * 0.35f + 0.08f;
+                if (dim > lvl) dim = lvl;
+                const float v = (seg == pos) ? lvl : dim;
                 c = hsv(st.ladder_hue + 0.06f * seg, 0.8f, v);
             }
             out[mapPixel(g, (Side)s, u)] = c;
