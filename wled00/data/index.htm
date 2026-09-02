@@ -424,7 +424,7 @@ var Z={
 "UDP Sound Sync":"UDP 声音同步","Line-In Jack":"线路输入插孔","Autosave":"自动保存",
 "GEQ Input Level":"GEQ 输入电平",
 "Power Monitor":"电流监测","Bus voltage":"母线电压","Main current":"主路电流",
-"Main power":"主路功率","Lamp FX Data":"灯效数据源"
+"Main power":"主路功率","Lamp FX Data":"灯效数据源","Analyzer":"分析仪表"
 };
 var LK="lampLang";
 function tx(t){var s=t.nodeValue,m=s.trim();if(m&&Z[m])t.nodeValue=s.replace(m,Z[m]);}
@@ -490,6 +490,64 @@ function tick(){
 }
 function unfold(){el("lpBody").style.display="";el("lpArrow").textContent="▾";tick();timer=setInterval(tick,1000);localStorage.setItem(KEY,"1");}
 function fold(){el("lpBody").style.display="none";el("lpArrow").textContent="▸";clearInterval(timer);timer=null;localStorage.setItem(KEY,"0");}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",build);else build();
+})();
+</script>
+<script>
+/* lamp fork：♪ 分析仪表（特效页底部）。展开时 10Hz 轮询 /lampdata，
+   canvas 局部绘制：16 段频谱 / 12 音级色度 / 拍点相位 / 调性人声档位。
+   折叠零请求。与电流卡片同款局部刷新模式，不触发 UI 全局重绘。 */
+(function(){
+var KEY="lampVizShow", timer=null;
+var NOTE=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+var STYLE=["AMBIENT","GENERAL","EDM","PERCUSSIVE"];
+var SRC=["bridge","local","LAMP1"];
+function el(i){return document.getElementById(i);}
+function build(){
+  var host=el("Effects");
+  if(!host)return;
+  var d=document.createElement("div");
+  d.innerHTML='<div id="lvHead" style="cursor:pointer;margin:10px 2px 4px;font-size:14px;opacity:.85;">♪ <span>Analyzer</span> <span id="lvArrow">▸</span></div>'+
+    '<div id="lvBody" style="display:none;background:var(--c-2,#333);border-radius:12px;padding:10px;">'+
+    '<canvas id="lvCv" width="300" height="132" style="width:100%;display:block;"></canvas>'+
+    '<div id="lvTxt" style="font-size:13px;text-align:left;line-height:1.6;margin-top:6px;opacity:.9;">–</div></div>';
+  host.appendChild(d);
+  el("lvHead").onclick=function(){ timer?fold():unfold(); };
+  if(localStorage.getItem(KEY)==="1")unfold();
+}
+function draw(d){
+  var cv=el("lvCv"),c=cv.getContext("2d"),W=cv.width,H=cv.height;
+  c.clearRect(0,0,W,H);
+  var i,bw=W/16;
+  for(i=0;i<16;i++){                         // 频谱：bands×6 归一
+    var v=Math.min(1,d.bands[i]*6),h=v*66;
+    c.fillStyle="hsl("+(i*16)+",85%,55%)";
+    c.fillRect(i*bw+1,70-h,bw-2,h);
+  }
+  c.fillStyle="rgba(128,128,128,.4)";c.fillRect(0,70,W,1);
+  var cw=W/12;
+  for(i=0;i<12;i++){                         // 色度：12 音级
+    var v2=Math.min(1,d.chroma[i]),h2=v2*36;
+    c.fillStyle="hsl("+(i*30)+",70%,60%)";
+    c.fillRect(i*cw+2,112-h2,cw-4,h2);
+    c.fillStyle="rgba(200,200,200,.75)";c.font="9px sans-serif";c.textAlign="center";
+    c.fillText(NOTE[i],i*cw+cw/2,122);
+  }
+  // 相位轨道：一行小点，拍点位置高亮
+  var y=128;
+  c.fillStyle="rgba(128,128,128,.35)";c.fillRect(0,y,W,3);
+  if(d.lock){c.fillStyle="#ffd54f";c.beginPath();c.arc(d.phase*W,y+1.5,4,0,6.283);c.fill();}
+  var key=d.key>=0?NOTE[d.key]+(d.maj?" 大调":" 小调"):"–";
+  el("lvTxt").innerHTML=
+    "BPM <b>"+(d.lock?d.bpm:"–")+"</b> · 调性 <b>"+key+"</b> · 人声 <b>"+Math.round(d.vocal*100)+"%</b>"+
+    " · 打击 <b>"+Math.round(d.perc*100)+"%</b> · 情绪 <b>"+Math.round(d.mood*100)+"%</b>"+
+    " · 档位 <b>"+(STYLE[d.style]||d.style)+"</b> · 源 <b>"+(SRC[d.src]||d.src)+"</b>";
+}
+function tick(){
+  fetch(getURL("/lampdata")).then(function(r){return r.json();}).then(draw).catch(function(){});
+}
+function unfold(){el("lvBody").style.display="";el("lvArrow").textContent="▾";tick();timer=setInterval(tick,100);localStorage.setItem(KEY,"1");}
+function fold(){el("lvBody").style.display="none";el("lvArrow").textContent="▸";clearInterval(timer);timer=null;localStorage.setItem(KEY,"0");}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",build);else build();
 })();
 </script>
