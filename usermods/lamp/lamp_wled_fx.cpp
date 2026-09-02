@@ -229,6 +229,22 @@ struct LampBridge {
 LampBridge bridge;
 Rgb        fxOut[TOTAL_LEDS];              // 渲染缓冲，各 segment 复用
 
+// 渲染帧距时基。⚠️ 不能把 bridge.dtMs 传给 fxRender/autoRetime：数据桥由
+// loop 高频保鲜（2~5ms 间距）后 dtMs 是 loop 间距，而渲染 23ms 一帧才推进
+// 一次 —— 所有衰减/包络的实际时间常数被拉慢 5~8 倍（实测：0.35 拍冲击衰减
+// 观感 2 拍+，Speed 拉到 204 仍糊）。渲染用自己的帧距。
+float    gRenderDt = 23.0f;
+uint32_t gLastRenderMs = 0;
+inline float renderTick() {
+  uint32_t now = millis();
+  if (now != gLastRenderMs) {
+    gRenderDt = (gLastRenderMs && now > gLastRenderMs) ? (float)(now - gLastRenderMs) : 23.0f;
+    if (gRenderDt > 100.0f) gRenderDt = 100.0f;
+    gLastRenderMs = now;
+  }
+  return gRenderDt;   // 同 ms 的第二个 ♪ segment 返回同帧距（状态已被首个推进）
+}
+
 // ── 临时崩溃插桩（定位「WS 切 ♪ 效果即 PANIC」）──
 // RTC noinit 段在 PANIC 重启后保留：崩溃时停留的最后标记 = 崩溃区间。
 // 定位完成后整段移除。
@@ -385,7 +401,7 @@ void modeLampCommon(FxId id) {
   lampTrace = 4;
   if (f.onset) dbgOnsetUse++;
   // 白平衡关掉：WLED 自己有全局色彩处理，别叠两层
-  fxRender(id, *st, cfg, f, geo, false, bridge.dtMs, fxOut);
+  fxRender(id, *st, cfg, f, geo, false, renderTick(), fxOut);
   lampTrace = 5;
   // 96 颗设计幅面 → 当前 segment 长度重采样（seg 恰为 96 时逐颗直映）。
   // 调色板融合：palette 0 (Default) 保持效果原生配色。选了调色板时分两型：
@@ -432,8 +448,8 @@ void modeLampAuto() {
   lampTrace = 0x10;
   static bool autoInited = false;
   bridge.fill(millis());
-  if (!autoInited) { autoInit(autoSt, autoCfg, bridge.dtMs); autoInited = true; }
-  autoRetime(autoSt, autoCfg, bridge.dtMs);
+  if (!autoInited) { autoInit(autoSt, autoCfg, gRenderDt); autoInited = true; }
+  autoRetime(autoSt, autoCfg, gRenderDt);
   autoUpdate(autoSt, autoCfg, bridge.frame, millis());
   lampTrace = 0x11;
   modeLampCommon(autoSt.current);
