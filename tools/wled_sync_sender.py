@@ -76,17 +76,22 @@ def main():
         target_ip = socket.gethostbyname(args.target)
     except OSError:
         target_ip = None
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-    if target_ip:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        probe.connect((target_ip, 11988))
-        local_ip = probe.getsockname()[0]
-        probe.close()
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
-                        socket.inet_aton(local_ip))
-        print("出口接口:", local_ip)
-    print("发送: LAMP1→11989 + V2→11988，目标", target_ip or "组播")
+    def probe_local(tip):
+        try:
+            pr = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            pr.connect((tip, 11988)); lip = pr.getsockname()[0]; pr.close()
+            return lip
+        except OSError:
+            return None
+    def make_sock(tip):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        lip = probe_local(tip) if tip else None
+        if lip:
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(lip))
+        return s, lip
+    sock, local_ip = make_sock(target_ip)
+    print("出口接口:", local_ip, "| 发送: LAMP1→11989 + V2→11988，目标", target_ip or "组播")
 
     frames = (LampFrameC * 8)()
     smth = 0.0
@@ -146,10 +151,32 @@ def main():
     with sd.InputStream(device=in_idx, samplerate=RATE, blocksize=BLOCK,
                         channels=2, callback=cb):
         print("运行中，Ctrl-C 退出")
+        last_resolve = time.time()
         while True:
             time.sleep(2)
             print("pkts=%d vol-peak=%.0f %s" % (stat["n"], stat["vol"], stat["rich"]), flush=True)
             stat["n"] = 0; stat["vol"] = 0.0; stat["on"] = 0
+            # 自愈：网络路径变化（ZT/WiFi 切换）后老 socket 会「活着但断路」——
+            # 照常 sendto、板子颗粒无收（实测踩中，需手动重启才恢复）。
+            # 每 2s 探测出口 IP，变化即重建；mDNS 每 60s 重解析防板子换 IP。
+            if target_ip:
+                cur = probe_local(target_ip)
+                if cur and cur != local_ip:
+                    print("出口变化 %s → %s，重建 socket" % (local_ip, cur), flush=True)
+                    try: sock.close()
+                    except OSError: pass
+                    sock, local_ip = make_sock(target_ip)
+            if time.time() - last_resolve > 60:
+                last_resolve = time.time()
+                try:
+                    nip = socket.gethostbyname(args.target)
+                    if nip != target_ip:
+                        print("目标变化 %s → %s" % (target_ip, nip), flush=True)
+                        target_ip = nip
+                        try: sock.close()
+                        except OSError: pass
+                        sock, local_ip = make_sock(target_ip)
+                except OSError: pass
 
 if __name__ == "__main__":
     main()
