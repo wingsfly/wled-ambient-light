@@ -122,8 +122,12 @@ struct LampBridge {
     StylePreset p = r.preset < STYLE_COUNT ? (StylePreset)r.preset : STYLE_GENERAL;
     frame.preset_changed = p != prevPreset;
     frame.preset = prevPreset = p;
-    pulseLatch = 0;                          // 消费一次即清
+    // ⚠️ latch 不在这里清 —— fill 由 loop 高频调用（2~5ms），在此消费会让
+    // 脉冲只存活一个 loop 周期、23ms 的渲染帧几乎总错过（实测比不锁存更差）。
+    // 清零在渲染帧末尾的 consumePulses()：语义 =「两次渲染之间到达过事件」。
   }
+
+  void consumePulses() { pulseLatch = 0; }
 
   void fill(uint32_t now) {
     if (now == lastMs) return;               // 每 WLED 帧只算一次，多 segment 共用
@@ -413,6 +417,7 @@ void modeLampCommon(FxId id) {
       SEGMENT.setPixelColor(i, RGBW32(c.r, c.g, c.b, 0));
     }
   }
+  bridge.consumePulses();                    // 渲染帧消费脉冲（见 fillFromRemote 注释）
   lampTrace = 6;
 }
 
