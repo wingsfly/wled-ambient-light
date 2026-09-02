@@ -376,8 +376,13 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     //
     // 峰值高度由声音决定（冲高瞬时），落下去的快慢由节拍决定（衰减跟拍周期）。
     // 用 rms_fast 而不是 peak：peak 自己就带保持衰减，套两层会拖成一片糊。
+    //
+    // 输入取**瞬态分量**（快包络超出慢均线的部分），不是绝对 rms —— AGC 把
+    // rms 归一到 ~0.25 后，绝对值的「地板」有 0.5×kFxLevelScale 高，冲击衰
+    // 不到暗，「闪亮后快速衰减」退化成常亮小波动（鼓点乐实测踩中）。
+    // 瞬态在鼓击时冲高、间隙自然归零，击打感才成立。
     {
-        float e = f.rms_fast * kFxLevelScale;
+        float e = (f.rms_fast - f.rms_slow) * 6.0f;
         if (!isfinite(e) || e < 0.0f) e = 0.0f;
         if (e > 1.0f) e = 1.0f;
         if (e > st.impact) st.impact = e;
