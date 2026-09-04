@@ -245,6 +245,28 @@ inline float renderTick() {
   return gRenderDt;   // 同 ms 的第二个 ♪ segment 返回同帧距（状态已被首个推进）
 }
 
+// ── 帧间电流斜坡（3A 适配器保护）──
+// 崩溃案定案：负载阶跃瞬态压跌 → BROWNOUT/PANIC。ABL 只管稳态上限，管不了
+// 一帧内从黑到满亮的电流沿。这里限制设计帧总亮度的**每帧增幅**：从黑爬到满亮
+// 至少 kSlewRiseMs（人眼看是干脆的一闪），衰减不限。三段布局让环/底柱也参与
+// 满亮，切效果瞬态更陡，2026-09-05 探针七连切实测 BROWNOUT，故加。
+constexpr float kSlewRiseMs = 150.0f;
+static float gSlewPrevSum = 0.0f;
+static void slewLimit(Rgb *px, unsigned n, float dt_ms) {
+  float sum = 0.0f;
+  for (unsigned i = 0; i < n; ++i) sum += (float)px[i].r + (float)px[i].g + (float)px[i].b;
+  const float full  = (float)n * 3.0f * 255.0f;
+  const float allow = gSlewPrevSum + full * (dt_ms / kSlewRiseMs);
+  if (sum > allow && sum > 0.0f) {
+    const float k = allow / sum;
+    for (unsigned i = 0; i < n; ++i) {
+      px[i].r = (uint8_t)(px[i].r * k); px[i].g = (uint8_t)(px[i].g * k); px[i].b = (uint8_t)(px[i].b * k);
+    }
+    sum = allow;
+  }
+  gSlewPrevSum = sum;
+}
+
 // ── 临时崩溃插桩（定位「WS 切 ♪ 效果即 PANIC」）──
 // RTC noinit 段在 PANIC 重启后保留：崩溃时停留的最后标记 = 崩溃区间。
 // 定位完成后整段移除。
@@ -618,28 +640,6 @@ static void dbgApply() {                          // 主循环上下文
     setRealtimePixel(i, on ? dbgRgb[0] : 0, on ? dbgRgb[1] : 0, on ? dbgRgb[2] : 0, 0);
   }
   strip.show();
-}
-
-// ── 帧间电流斜坡（3A 适配器保护）──
-// 崩溃案定案：负载阶跃瞬态压跌 → BROWNOUT/PANIC。ABL 只管稳态上限，管不了
-// 一帧内从黑到满亮的电流沿。这里限制设计帧总亮度的**每帧增幅**：从黑爬到满亮
-// 至少 kSlewRiseMs（人眼看是干脆的一闪），衰减不限。三段布局让环/底柱也参与
-// 满亮，切效果瞬态更陡，2026-09-05 探针七连切实测 BROWNOUT，故加。
-constexpr float kSlewRiseMs = 150.0f;
-static float gSlewPrevSum = 0.0f;
-static void slewLimit(Rgb *px, unsigned n, float dt_ms) {
-  float sum = 0.0f;
-  for (unsigned i = 0; i < n; ++i) sum += (float)px[i].r + (float)px[i].g + (float)px[i].b;
-  const float full  = (float)n * 3.0f * 255.0f;
-  const float allow = gSlewPrevSum + full * (dt_ms / kSlewRiseMs);
-  if (sum > allow && sum > 0.0f) {
-    const float k = allow / sum;
-    for (unsigned i = 0; i < n; ++i) {
-      px[i].r = (uint8_t)(px[i].r * k); px[i].g = (uint8_t)(px[i].g * k); px[i].b = (uint8_t)(px[i].b * k);
-    }
-    sum = allow;
-  }
-  gSlewPrevSum = sum;
 }
 
 class LampFxUsermod : public Usermod {
