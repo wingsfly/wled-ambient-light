@@ -19,8 +19,9 @@ static Geometry refGeom() {
     return g;
 }
 
-void test_ref_left_bottom_is_index_0(void) {
-    TEST_ASSERT_EQUAL_UINT16(0, mapPixel(refGeom(), SIDE_L, 0.0f));
+// 三段布局（2026-09-05 实测）：u 只铺主灯柱，主柱底 = 索引 18（MAIN_OFS）。
+void test_ref_left_bottom_is_main_offset(void) {
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS, mapPixel(refGeom(), SIDE_L, 0.0f));
 }
 
 void test_ref_left_top_is_index_47(void) {
@@ -28,32 +29,32 @@ void test_ref_left_top_is_index_47(void) {
 }
 
 void test_ref_right_occupies_second_bus(void) {
-    TEST_ASSERT_EQUAL_UINT16(48, mapPixel(refGeom(), SIDE_R, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(48 + MAIN_OFS, mapPixel(refGeom(), SIDE_R, 0.0f));
     TEST_ASSERT_EQUAL_UINT16(95, mapPixel(refGeom(), SIDE_R, 1.0f));
 }
 
 // s1_is_left=false 表示 S1 接右管，于是「左」这一侧要走第二条总线。
 void test_swapped_sides_move_left_to_second_bus(void) {
     Geometry g = refGeom(); g.s1_is_left = false;
-    TEST_ASSERT_EQUAL_UINT16(48, mapPixel(g, SIDE_L, 0.0f));
-    TEST_ASSERT_EQUAL_UINT16(0,  mapPixel(g, SIDE_R, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(48 + MAIN_OFS, mapPixel(g, SIDE_L, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS,      mapPixel(g, SIDE_R, 0.0f));
 }
 
-// s1_reversed=true 表示 S1 数据链首颗在管顶，于是 u=1（顶）对应索引 0。
+// s1_reversed=true 表示 S1 主柱数据链首颗在柱顶，于是 u=1（顶）对应主柱底索引 18。
 void test_s1_reversed_flips_only_s1(void) {
     Geometry g = refGeom(); g.s1_reversed = true;
-    TEST_ASSERT_EQUAL_UINT16(47, mapPixel(g, SIDE_L, 0.0f));
-    TEST_ASSERT_EQUAL_UINT16(0,  mapPixel(g, SIDE_L, 1.0f));
+    TEST_ASSERT_EQUAL_UINT16(47,       mapPixel(g, SIDE_L, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS, mapPixel(g, SIDE_L, 1.0f));
     // S2 不受影响
-    TEST_ASSERT_EQUAL_UINT16(48, mapPixel(g, SIDE_R, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(48 + MAIN_OFS, mapPixel(g, SIDE_R, 0.0f));
     TEST_ASSERT_EQUAL_UINT16(95, mapPixel(g, SIDE_R, 1.0f));
 }
 
 void test_s2_reversed_flips_only_s2(void) {
     Geometry g = refGeom(); g.s2_reversed = true;
-    TEST_ASSERT_EQUAL_UINT16(95, mapPixel(g, SIDE_R, 0.0f));
-    TEST_ASSERT_EQUAL_UINT16(48, mapPixel(g, SIDE_R, 1.0f));
-    TEST_ASSERT_EQUAL_UINT16(0,  mapPixel(g, SIDE_L, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(95,            mapPixel(g, SIDE_R, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(48 + MAIN_OFS, mapPixel(g, SIDE_R, 1.0f));
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS,      mapPixel(g, SIDE_L, 0.0f));
 }
 
 void test_u_out_of_range_is_clamped(void) {
@@ -61,8 +62,8 @@ void test_u_out_of_range_is_clamped(void) {
     // 用字面量而非自反比较。注意：单靠测试**盖不住**「删掉下钳制」这个变异 ——
     // native env 跑在 -O0，负浮点转无符号是 UB，那里恰好得 0 从而掩盖问题。
     // 下钳制真正由实现侧的有符号中间量兜住，见 lamp_geometry.h。
-    TEST_ASSERT_EQUAL_UINT16(0,  mapPixel(g, SIDE_L, -5.0f));
-    TEST_ASSERT_EQUAL_UINT16(47, mapPixel(g, SIDE_L,  5.0f));
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS, mapPixel(g, SIDE_L, -5.0f));
+    TEST_ASSERT_EQUAL_UINT16(47,       mapPixel(g, SIDE_L,  5.0f));
 }
 
 void test_nan_maps_to_bottom(void) {
@@ -71,21 +72,21 @@ void test_nan_maps_to_bottom(void) {
     // fcvtzs 对 NaN 也返回 0。它记录意图、锁住契约，但真正的兜底来自实现里
     // 的有符号中间量与索引钳制（后置条件 [0, TOTAL_LEDS) 恒成立）。
     // xtensa 上的行为未知，这正是守卫存在的理由。
-    TEST_ASSERT_EQUAL_UINT16(0, mapPixel(g, SIDE_L, NAN));
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS, mapPixel(g, SIDE_L, NAN));
 }
 
-// 内部锚点。双射测试是顺序无关的，看不见内部排列错误；而 floor(48u) 与
-// round(47u) 在**所有** k/47 网格点上完全一致，所以必须用一个**离网格**的
-// 值才能把量化约定钉死。变异测试证明：没有这条，min(47,(uint16_t)(u*48))
+// 内部锚点。双射测试是顺序无关的，看不见内部排列错误；而 floor(30u) 与
+// round(29u) 在**所有** k/29 网格点上完全一致，所以必须用一个**离网格**的
+// 值才能把量化约定钉死。变异测试证明：没有这条，min(29,(uint16_t)(u*30))
 // 这个错误实现能全绿通过。
 void test_interior_anchors_pin_the_quantization(void) {
     Geometry g = refGeom();
-    TEST_ASSERT_EQUAL_UINT16(24, mapPixel(g, SIDE_L, 0.5f));
-    TEST_ASSERT_EQUAL_UINT16(1,  mapPixel(g, SIDE_L, 0.0200f));  // round(0.94)=1，floor(0.96)=0
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS + 15, mapPixel(g, SIDE_L, 0.5f));      // round(14.5)=15
+    TEST_ASSERT_EQUAL_UINT16(MAIN_OFS + 1,  mapPixel(g, SIDE_L, 0.0200f));   // round(0.58)=1，floor(0.6)=0
 }
 
-// 最强的一条不变量：对任意配置，u = k/47（k=0..47）必须恰好打中
-// 该管 48 个索引各一次 —— 能同时抓住 off-by-one、别名、越界。
+// 最强的一条不变量：对任意配置，u = k/29（k=0..29）必须恰好打中
+// 该管主柱 30 个索引各一次 —— 能同时抓住 off-by-one、别名、越界。
 void test_every_config_is_a_bijection_over_its_tube(void) {
     for (int combo = 0; combo < 8; ++combo) {
         Geometry g;
@@ -99,8 +100,8 @@ void test_every_config_is_a_bijection_over_its_tube(void) {
             uint16_t lo = TOTAL_LEDS, hi = 0;
             int prev = -1;
 
-            for (int k = 0; k < LEDS_PER_TUBE; ++k) {
-                uint16_t idx = mapPixel(g, side, (float)k / (LEDS_PER_TUBE - 1));
+            for (int k = 0; k < MAIN_LEDS; ++k) {
+                uint16_t idx = mapPixel(g, side, (float)k / (MAIN_LEDS - 1));
                 TEST_ASSERT_LESS_THAN_UINT16(TOTAL_LEDS, idx);
                 TEST_ASSERT_FALSE_MESSAGE(hit[idx], "同一索引被打中两次");
                 hit[idx] = true;
@@ -119,19 +120,42 @@ void test_every_config_is_a_bijection_over_its_tube(void) {
 
             int total = 0;
             for (int i = 0; i < TOTAL_LEDS; ++i) if (hit[i]) total++;
-            TEST_ASSERT_EQUAL_INT(LEDS_PER_TUBE, total);
+            TEST_ASSERT_EQUAL_INT(MAIN_LEDS, total);
 
-            // 48 颗必须落在同一根管子的连续半区（[0,47] 或 [48,95]），不能跨管。
+            // 30 颗必须落在同一根管子的主柱区（[18,47] 或 [66,95]），不能跨管、不能碰环/底柱。
             // 让本不变量自足，不依赖端点测试。
-            TEST_ASSERT_TRUE_MESSAGE(lo == 0 || lo == LEDS_PER_TUBE, "起点不在某根管子开头");
-            TEST_ASSERT_EQUAL_UINT16(LEDS_PER_TUBE - 1, hi - lo);
+            TEST_ASSERT_TRUE_MESSAGE(lo == MAIN_OFS || lo == LEDS_PER_TUBE + MAIN_OFS, "起点不在某根管子的主柱开头");
+            TEST_ASSERT_EQUAL_UINT16(MAIN_LEDS - 1, hi - lo);
+        }
+    }
+}
+
+// 三段划分：环 12 + 底柱 6 + 主柱 30 必须恰好覆盖每管 48 颗各一次，任何配置下。
+void test_zones_partition_each_tube_exactly(void) {
+    for (int combo = 0; combo < 8; ++combo) {
+        Geometry g;
+        g.s1_is_left  = (combo & 1) != 0;
+        g.s1_reversed = (combo & 2) != 0;
+        g.s2_reversed = (combo & 4) != 0;
+        for (int s = 0; s < 2; ++s) {
+            Side side = (s == 0) ? SIDE_L : SIDE_R;
+            int hit[TOTAL_LEDS] = {0};
+            for (uint16_t k = 0; k < RING_LEDS; ++k) hit[zonePixel(g, side, ZONE_RING, k)]++;
+            for (uint16_t k = 0; k < BOT_LEDS;  ++k) hit[zonePixel(g, side, ZONE_BOTTOM, k)]++;
+            for (uint16_t k = 0; k < MAIN_LEDS; ++k) hit[mapPixel(g, side, (float)k / (MAIN_LEDS - 1))]++;
+            const uint16_t base = mapPixel(g, side, 0.0f) < LEDS_PER_TUBE ? 0 : LEDS_PER_TUBE;
+            for (uint16_t i = 0; i < TOTAL_LEDS; ++i) {
+                const bool mine = i >= base && i < base + LEDS_PER_TUBE;
+                TEST_ASSERT_EQUAL_INT_MESSAGE(mine ? 1 : 0, hit[i], "每管 48 颗须被三段恰好覆盖一次");
+            }
         }
     }
 }
 
 int main(int, char **) {
     UNITY_BEGIN();
-    RUN_TEST(test_ref_left_bottom_is_index_0);
+    RUN_TEST(test_ref_left_bottom_is_main_offset);
+    RUN_TEST(test_zones_partition_each_tube_exactly);
     RUN_TEST(test_ref_left_top_is_index_47);
     RUN_TEST(test_ref_right_occupies_second_bus);
     RUN_TEST(test_swapped_sides_move_left_to_second_bus);
