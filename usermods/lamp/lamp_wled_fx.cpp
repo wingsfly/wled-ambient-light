@@ -491,7 +491,7 @@ void modeLampAuto() {
       const uint8_t v = (uint8_t)(140 - age * 140 / 250);
       for (int s = 0; s < 2; ++s)
         for (uint16_t k = 0; k < RING_LEDS; ++k)
-          SEGMENT.setPixelColor(zonePixel(geo, (Side)s, ZONE_RING, k), RGBW32(v, v, v, 0));
+          SEGMENT.setPixelColor(zonePixel(Geometry{}, (Side)s, ZONE_RING, k), RGBW32(v, v, v, 0));   // 两环同色，左右归属无关
     }
   }
 }
