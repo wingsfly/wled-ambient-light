@@ -69,9 +69,22 @@ def find_device(sub, kind):
             return i, d["name"]
     return None, None
 
+def resolve_target(spec):
+    """逗号分隔的候选按序解析，第一个成功的即目标；全失败抛 OSError。
+    换网后 mDNS 可能解析不到而固定 IP 能通（或反过来），两者都列上就不用改配置。"""
+    last = None
+    for cand in [c.strip() for c in spec.split(",") if c.strip()]:
+        try:
+            return socket.gethostbyname(cand)
+        except OSError as e:
+            last = e
+    raise last or OSError("no target")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", default="wled-c4d3a4.local")
+    ap.add_argument("--target", default="wled-c4d3a4.local",
+                    help="板子地址，逗号分隔多个候选（mDNS 名或 IP），取第一个能解析的")
     ap.add_argument("--input", default="BlackHole")
     ap.add_argument("--lib", default="/Users/hjma/workspace/iflytek/numira/wled-ambient-light/tools/liblamp.dylib")
     ap.add_argument("--gain", type=float, default=1.0, help="进管线前的手动增益")
@@ -135,7 +148,7 @@ def main():
     print("输入:", in_name)
 
     try:
-        target_ip = socket.gethostbyname(args.target)
+        target_ip = resolve_target(args.target)
     except OSError:
         target_ip = None
     def probe_local(tip):
@@ -245,7 +258,7 @@ def main():
             if time.time() - last_resolve > 60:
                 last_resolve = time.time()
                 try:
-                    nip = socket.gethostbyname(args.target)
+                    nip = resolve_target(args.target)
                     if nip != target_ip:
                         print("目标变化 %s → %s" % (target_ip, nip), flush=True)
                         target_ip = nip

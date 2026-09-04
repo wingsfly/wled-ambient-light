@@ -1180,6 +1180,52 @@ void test_zones_derive_from_main_column(void) {
     for (uint16_t i = 48; i < 66; ++i) TEST_ASSERT_TRUE(px[i].r == 0 && px[i].g == 0 && px[i].b == 0);
 }
 
+
+// ── 三段专属行为 ──
+
+static int ringBrightest(const Rgb *px, const Geometry &g, Side side) {
+    int best = -1, bv = -1;
+    for (uint16_t k = 0; k < RING_LEDS; ++k) {
+        const Rgb c = px[zonePixel(g, side, ZONE_RING, k)];
+        const int v = c.r + c.g + c.b;
+        if (v > bv) { bv = v; best = k; }
+    }
+    return best;
+}
+
+void test_beat_pulse_ring_dot_follows_the_phase(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS];
+    AudioFrame f = liveFrame(); f.beat_locked = true;
+    FxState a{}, b{};
+    f.phase = 0.25f; fxRender(FX_BEAT_PULSE, a, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(3, ringBrightest(px, g, SIDE_L), "相位 0.25 光点应在环第 3 颗");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(3, ringBrightest(px, g, SIDE_R), "两管环同步");
+    f.phase = 0.75f; fxRender(FX_BEAT_PULSE, b, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(9, ringBrightest(px, g, SIDE_L), "相位 0.75 光点应在环第 9 颗（顺时针）");
+    // 静音：环全黑
+    AudioFrame silent; FxState c{};
+    fxRender(FX_BEAT_PULSE, c, g_fxcfg, silent, g, false, 23.22f, px);
+    for (uint16_t k = 0; k < RING_LEDS; ++k) {
+        const Rgb q = px[zonePixel(g, SIDE_L, ZONE_RING, k)];
+        TEST_ASSERT_TRUE_MESSAGE(q.r == 0 && q.g == 0 && q.b == 0, "静音时环必须熄灭");
+    }
+}
+
+void test_bar_ladder_ring_counts_beats(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS];
+    for (int pos = 0; pos < 4; ++pos) {
+        AudioFrame f = liveFrame(); f.beats_per_bar = 4; f.bar_pos = pos;
+        FxState st{};
+        fxRender(FX_BAR_LADDER, st, g_fxcfg, f, g, false, 23.22f, px);
+        int lit = 0;
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            const Rgb c = px[zonePixel(g, SIDE_L, ZONE_RING, k)];
+            if (c.r || c.g || c.b) ++lit;
+        }
+        TEST_ASSERT_EQUAL_INT_MESSAGE(3 * (pos + 1), lit, "4/4 拍：第 pos 拍环应亮 3·(pos+1) 颗");
+    }
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_every_module_to_the_same_hop);
@@ -1210,6 +1256,8 @@ int main(int, char **) {
     RUN_TEST(test_color_flow_hue_span_follows_the_mood);
     RUN_TEST(test_geometry_maps_u_onto_main_column_only);
     RUN_TEST(test_zones_derive_from_main_column);
+    RUN_TEST(test_beat_pulse_ring_dot_follows_the_phase);
+    RUN_TEST(test_bar_ladder_ring_counts_beats);
     RUN_TEST(test_color_flow_direction_follows_the_energy_trend);
     RUN_TEST(test_color_flow_speed_follows_the_bpm);
     RUN_TEST(test_color_flow_washes_out_on_a_section_change);

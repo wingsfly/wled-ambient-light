@@ -842,16 +842,20 @@ inline void fxDownbeatBloom(const FxState &st, const AudioFrame &f,
 
 // 小节阶梯：管子切成 beats_per_bar 段，走到第几拍就点亮到第几段，
 // 每过一小节整体换色。**看得见拍号** —— 3/4 与 4/4 一眼能分开。
+// 阶梯亮度基线走慢包络（×2.5 补偿打击乐的低占空比）——结构显示要稳：
+// rms_fast 在鼓点间隙和休止拍归零，阶梯会跟着音量扑闪，"第几拍"读不出来。
+// 快包络只留少量，让击打有一口呼吸。柱与底座环共用。
+inline float ladderLevel(const AudioFrame &f) {
+    return perceptual(clamp01((f.rms_slow * 2.5f + f.rms_fast * 0.6f) * kFxLevelScale));
+}
+
 inline void fxBarLadder(const FxState &st, const AudioFrame &f,
                         const Geometry &g, Rgb *out) {
     int n = f.beats_per_bar;
     if (n < 2) n = 4;
     if (n > 8) n = 8;
     const int pos = (f.bar_pos >= 0 && f.bar_pos < n) ? f.bar_pos : 0;
-    // 亮度基线走慢包络（×2.5 补偿打击乐的低占空比）——结构显示要稳：
-    // rms_fast 在鼓点间隙和休止拍归零，阶梯会跟着音量扑闪，"第几拍"读不出来。
-    // 快包络只留少量，让击打有一口呼吸。
-    const float lvl = perceptual(clamp01((f.rms_slow * 2.5f + f.rms_fast * 0.6f) * kFxLevelScale));
+    const float lvl = ladderLevel(f);
     if (lvl <= 0.0f) return;
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
@@ -1125,6 +1129,50 @@ inline void fillZones(const Geometry &g, Rgb *out) {
     }
 }
 
+// ── 三段专属行为：覆盖 fillZones 的派生默认 ──────────────────────
+// 底座环 12 颗顺时针（k=0 起点）。改这里只动环/底柱，主柱由各效果自己画。
+
+// 拍点脉冲：一颗光点踩拍绕环一圈。位置直通 st.runner（锁拍 = 拍相位，
+// 未锁 = 1.4s 一圈慢巡游，与 Beat Runner 同源），身后 3 颗拖尾，叠在派生底光之上。
+inline void zoneBeatPulse(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    if (!(f.rms_fast > 0.003f)) return;                 // 静音：环随柱同黑
+    const float hue = f.beat_locked ? fmodf(f.bpm / 240.0f, 1.0f) : 0.55f;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            float d = st.runner - (float)k / (float)RING_LEDS;   // 拖尾只朝身后
+            if (d < 0.0f) d += 1.0f;
+            const float tail = (d < 0.25f) ? (1.0f - d / 0.25f) : 0.0f;
+            if (tail <= 0.0f) continue;
+            const Rgb dot = hsv(hue, 0.75f, perceptual(tail));
+            Rgb &px = out[zonePixel(g, (Side)s, ZONE_RING, k)];
+            px = Rgb{ px.r > dot.r ? px.r : dot.r, px.g > dot.g ? px.g : dot.g, px.b > dot.b ? px.b : dot.b };
+        }
+}
+
+// 小节阶梯：环同步数拍。走到第 pos 拍就点亮到第 12·(pos+1)/n 颗（4/4 每拍 3 颗），
+// 当前拍那组全亮、走过的留暗底、满小节清空——与柱上的阶梯同一套语义、同一套颜色。
+inline void zoneBarLadder(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    int n = f.beats_per_bar;
+    if (n < 2) n = 4;
+    if (n > 8) n = 8;
+    const int pos = (f.bar_pos >= 0 && f.bar_pos < n) ? f.bar_pos : 0;
+    const float lvl = ladderLevel(f);
+    if (lvl <= 0.0f) return;
+    float dim = lvl * 0.35f + 0.08f;
+    if (dim > lvl) dim = lvl;
+    const int lit  = (int)((float)RING_LEDS * (float)(pos + 1) / (float)n + 0.5f);
+    const int from = (int)((float)RING_LEDS * (float)pos / (float)n + 0.5f);   // 当前拍那组的起点
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            Rgb c{0, 0, 0};
+            if ((int)k < lit) {
+                const int seg = (int)k * n / RING_LEDS;
+                c = hsv(st.ladder_hue + 0.06f * seg, 0.8f, ((int)k >= from) ? lvl : dim);
+            }
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = c;
+        }
+}
+
 inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
                      const Geometry &g, bool white_balance, float dt_ms, Rgb *out) {
     fxAdvance(st, c, f, dt_ms);      // 状态先推进，无状态的效果不受影响
@@ -1156,6 +1204,11 @@ inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &
         default:             fxSpectrumBars(f, g, out);      break;
     }
     fillZones(g, out);
+    switch (id) {                                   // 三段专属行为覆盖派生默认
+        case FX_BEAT_PULSE: zoneBeatPulse(st, f, g, out); break;
+        case FX_BAR_LADDER: zoneBarLadder(st, f, g, out); break;
+        default: break;
+    }
     for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
         out[i] = applyWhiteBalance(out[i], white_balance);
 }
