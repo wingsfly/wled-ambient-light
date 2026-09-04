@@ -541,8 +541,8 @@ function px(){return mode=='step'?[cur]:Array.from(sel).sort(function(a,b){retur
 function send(){active=true;fetch('/leddbg?px='+px().join(',')+'&c='+hex()).then(function(r){return r.json()}).then(function(j){var w=[];
  if(j.mso)w.push('⚠ 设置里 Use main segment only 已开，编号会经分段变换，请关闭后再调');
  if(j.ovr)w.push('⚠ Live override 已开，实时数据被忽略，调试无效');
- $('st').innerHTML='调试中 · 共 '+j.n+' 颗 · 已点亮 '+px().length+' 颗'+(w.length?'<div class="warn">'+w.join('<br>')+'</div>':'');
- if(j.n&&j.n!=N){N=j.n;build()}}).catch(function(){$('st').textContent='连接失败，检查板子是否在线'});
+ $('st').innerHTML='调试中 · 管灯 '+(j.t||j.n)+' 颗'+(j.n>(j.t||j.n)?'（另 '+(j.n-j.t)+' 颗状态灯不参与）':'')+' · 已点亮 '+px().length+' 颗'+(w.length?'<div class="warn">'+w.join('<br>')+'</div>':'');
+ var tn=j.t||j.n;if(tn&&tn!=N){N=tn;build()}}).catch(function(){$('st').textContent='连接失败，检查板子是否在线'});
  if(!timer)timer=setInterval(send,1000)}
 function stop(){active=false;clearInterval(timer);timer=null;stopAuto();fetch('/leddbg?off=1').catch(function(){});$('st').textContent='已退出，灯 3 秒内恢复原效果'}
 function build(){['grid0','grid1'].forEach(function(id,k){var g=$(id);g.innerHTML='';for(var i=k*48;i<Math.min(N,(k+1)*48);i++){var d=document.createElement('div');d.className='c';d.textContent=i;d.dataset.i=i;g.appendChild(d)}});paint()}
@@ -687,8 +687,8 @@ class LampFxUsermod : public Usermod {
             dbgPending = true;
           }
           char buf[64];
-          snprintf(buf, sizeof(buf), "{\"n\":%u,\"mso\":%d,\"ovr\":%d}",
-                   (unsigned)strip.getLengthTotal(), useMainSegmentOnly ? 1 : 0, realtimeOverride ? 1 : 0);
+          snprintf(buf, sizeof(buf), "{\"n\":%u,\"t\":%u,\"mso\":%d,\"ovr\":%d}",
+                   (unsigned)strip.getLengthTotal(), (unsigned)TOTAL_LEDS, useMainSegmentOnly ? 1 : 0, realtimeOverride ? 1 : 0);
           request->send(200, "application/json", buf);
         });
         routeOk = true;
