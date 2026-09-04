@@ -1202,12 +1202,14 @@ void test_beat_pulse_ring_dot_follows_the_phase(void) {
     TEST_ASSERT_EQUAL_INT_MESSAGE(3, ringBrightest(px, g, SIDE_R), "两管环同步");
     f.phase = 0.75f; fxRender(FX_BEAT_PULSE, b, g_fxcfg, f, g, false, 23.22f, px);
     TEST_ASSERT_EQUAL_INT_MESSAGE(9, ringBrightest(px, g, SIDE_L), "相位 0.75 光点应在环第 9 颗（顺时针）");
-    // 静音：环全黑
+    // 静音：Beat Pulse 的柱故意保留呼吸底光（不让灯像坏了），环随之有派生底光，
+    // 但**不能有光点**——12 颗必须同色。
     AudioFrame silent; FxState c{};
     fxRender(FX_BEAT_PULSE, c, g_fxcfg, silent, g, false, 23.22f, px);
-    for (uint16_t k = 0; k < RING_LEDS; ++k) {
+    const Rgb q0 = px[zonePixel(g, SIDE_L, ZONE_RING, 0)];
+    for (uint16_t k = 1; k < RING_LEDS; ++k) {
         const Rgb q = px[zonePixel(g, SIDE_L, ZONE_RING, k)];
-        TEST_ASSERT_TRUE_MESSAGE(q.r == 0 && q.g == 0 && q.b == 0, "静音时环必须熄灭");
+        TEST_ASSERT_TRUE_MESSAGE(q.r == q0.r && q.g == q0.g && q.b == q0.b, "静音时环上不该有光点");
     }
 }
 
