@@ -399,6 +399,7 @@ void modeLampCommon(FxId id) {
   // 白平衡关掉：WLED 自己有全局色彩处理，别叠两层
   fxRender(id, *st, cfg, f, geo, false, renderTick(), fxOut);
   lampTrace = 5;
+  slewLimit(fxOut, TOTAL_LEDS, gRenderDt);   // 3A 适配器保护：限制帧间电流上升沿
   // 96 颗设计幅面 → 当前 segment 长度重采样（seg 恰为 96 时逐颗直映）。
   // 调色板融合：palette 0 (Default) 保持效果原生配色。选了调色板时分两型：
   //  · 空间多彩型（色相沿管本来就有行程）：hue → 调色板索引，形状与配色
@@ -617,6 +618,28 @@ static void dbgApply() {                          // 主循环上下文
     setRealtimePixel(i, on ? dbgRgb[0] : 0, on ? dbgRgb[1] : 0, on ? dbgRgb[2] : 0, 0);
   }
   strip.show();
+}
+
+// ── 帧间电流斜坡（3A 适配器保护）──
+// 崩溃案定案：负载阶跃瞬态压跌 → BROWNOUT/PANIC。ABL 只管稳态上限，管不了
+// 一帧内从黑到满亮的电流沿。这里限制设计帧总亮度的**每帧增幅**：从黑爬到满亮
+// 至少 kSlewRiseMs（人眼看是干脆的一闪），衰减不限。三段布局让环/底柱也参与
+// 满亮，切效果瞬态更陡，2026-09-05 探针七连切实测 BROWNOUT，故加。
+constexpr float kSlewRiseMs = 150.0f;
+static float gSlewPrevSum = 0.0f;
+static void slewLimit(Rgb *px, unsigned n, float dt_ms) {
+  float sum = 0.0f;
+  for (unsigned i = 0; i < n; ++i) sum += (float)px[i].r + (float)px[i].g + (float)px[i].b;
+  const float full  = (float)n * 3.0f * 255.0f;
+  const float allow = gSlewPrevSum + full * (dt_ms / kSlewRiseMs);
+  if (sum > allow && sum > 0.0f) {
+    const float k = allow / sum;
+    for (unsigned i = 0; i < n; ++i) {
+      px[i].r = (uint8_t)(px[i].r * k); px[i].g = (uint8_t)(px[i].g * k); px[i].b = (uint8_t)(px[i].b * k);
+    }
+    sum = allow;
+  }
+  gSlewPrevSum = sum;
 }
 
 class LampFxUsermod : public Usermod {
