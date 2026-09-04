@@ -508,7 +508,7 @@ function build(){
   var host=el("Segments");
   if(!host)return;
   var d=document.createElement("div");
-  d.innerHTML='<div id="lvHead" style="cursor:pointer;margin:10px 2px 4px;font-size:14px;opacity:.85;">♪ <span>Analyzer</span> <span id="lvArrow">▸</span></div>'+
+  d.innerHTML='<div id="lvHead" style="cursor:pointer;margin:10px 2px 4px;font-size:14px;opacity:.85;">♪ <span>Analyzer</span> <span id="lvArrow">▸</span><a href="/leddebug" onclick="event.stopPropagation()" style="float:right;font-size:12px;opacity:.7;color:inherit;">灯珠调试</a></div>'+
     '<div id="lvBody" style="display:none;background:var(--c-2,#333);border-radius:12px;padding:10px;">'+
     '<canvas id="lvCv" width="300" height="132" style="width:100%;display:block;"></canvas>'+
     '<div id="lvTxt" style="font-size:13px;text-align:left;line-height:1.6;margin-top:6px;opacity:.9;">–</div></div>';
