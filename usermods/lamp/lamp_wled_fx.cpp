@@ -483,6 +483,137 @@ LAMP_FX(mLampAurora,    FX_SLOW_AURORA,    "♪ Slow Aurora@Speed,Sensitivity,,,
 
 } // namespace
 
+// ── 灯珠位置调试页（/leddebug）：按物理编号直写像素 ──
+// 走 realtime 通道（DDP/E1.31 同款机制）而不是 JSON "i"：后者按分段相对编号
+// 并经反转/镜像/分组变换，调试要的恰恰是不经任何变换的物理序。页面每秒
+// 续租 3 秒锁；关页 3 秒后自动退出 realtime、灯恢复原效果。
+static const char kLedDbgPage[] PROGMEM = R"lamp(<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>灯珠位置调试</title>
+<style>
+body{margin:0;background:#111;color:#eee;font:15px/1.5 -apple-system,Helvetica,Arial,sans-serif;padding:12px}
+h1{font-size:18px;margin:0 0 6px}
+.st{font-size:13px;opacity:.85;margin-bottom:8px}
+.warn{color:#fc6}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+button{background:#333;color:#eee;border:1px solid #555;border-radius:8px;padding:8px 14px;font-size:15px}
+button.on{background:#2a6;border-color:#2a6;color:#000}
+.sw{width:32px;height:32px;border-radius:50%;border:2px solid #555;padding:0}
+.sw.on{border-color:#fff;box-shadow:0 0 0 2px #2a6}
+.big{font-size:56px;font-weight:700;text-align:center;margin:6px 0;line-height:1}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;margin:6px 0 12px}
+.c{aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#222;border:1px solid #444;border-radius:6px;font-size:12px;cursor:pointer;user-select:none}
+.c.on{background:#fff;color:#000;font-weight:700}
+.c.cur{outline:2px solid #2a6}
+label.t{font-size:13px;opacity:.85;display:block;margin-top:8px}
+input[type=text]{background:#222;color:#eee;border:1px solid #555;border-radius:6px;padding:6px 8px;font-size:15px;width:90px}
+textarea{width:100%;box-sizing:border-box;background:#222;color:#eee;border:1px solid #555;border-radius:6px;padding:6px;font-size:13px;height:110px}
+table{border-collapse:collapse}td{padding:4px 6px;font-size:14px}
+</style></head><body>
+<h1>灯珠位置调试</h1>
+<div class="st" id="st">连接中…</div>
+<div class="row">颜色
+ <button class="sw on" data-c="ffffff" style="background:#fff"></button><button class="sw" data-c="ff0000" style="background:#f00"></button><button class="sw" data-c="00ff00" style="background:#0f0"></button><button class="sw" data-c="0000ff" style="background:#00f"></button>
+ 亮度 <input type="range" id="bri" min="10" max="255" value="120">
+ <button id="stop">退出调试</button></div>
+<div class="row"><button class="tab on" data-m="step">单步点亮</button><button class="tab" data-m="multi">多选点亮</button></div>
+<div id="pStep">
+ <div class="big" id="cur">0</div>
+ <div class="row" style="justify-content:center"><button id="prev">◀ 上一颗</button><button id="next">下一颗 ▶</button><button id="auto">自动步进</button>
+ <select id="iv"><option value="300">0.3s</option><option value="600" selected>0.6s</option><option value="1000">1s</option><option value="2000">2s</option></select></div>
+ <div class="st">键盘 ←/→ 单步、空格 自动步进；点下方格子直接跳到该编号。</div>
+</div>
+<div id="pMulti" style="display:none">
+ <div class="row"><button id="clr">清空</button><button data-r="0-47">全选 A 管</button><button data-r="48-95">全选 B 管</button><button id="inv">反选</button>
+ 范围 <input type="text" id="rng" placeholder="如 3-10"><button id="rgo">点亮范围</button></div>
+ <div class="st">点格子切换选中；多颗同时亮用于确认一段的边界。</div>
+</div>
+<label class="t">灯管 A（bus 1 · 编号 0–47）</label><div class="grid" id="grid0"></div>
+<label class="t">灯管 B（bus 2 · 编号 48–95）</label><div class="grid" id="grid1"></div>
+<label class="t">记录结果：填编号范围（如 3-40），点“试亮”验证整段</label>
+<table id="rec"></table>
+<div class="row"><button id="exp">生成记录文本</button></div>
+<textarea id="out" placeholder="点“生成记录文本”后整段复制给我"></textarea>
+<script>
+var N=96,sel=new Set(),cur=0,mode='step',color='ffffff',timer=null,autoT=null,active=false;
+function $(i){return document.getElementById(i)}
+function hex(){var b=+$('bri').value;return [0,2,4].map(function(k){var v=parseInt(color.substr(k,2),16)*b/255|0;return ('0'+v.toString(16)).slice(-2)}).join('')}
+function px(){return mode=='step'?[cur]:Array.from(sel).sort(function(a,b){return a-b})}
+function send(){active=true;fetch('/leddbg?px='+px().join(',')+'&c='+hex()).then(function(r){return r.json()}).then(function(j){var w=[];
+ if(j.mso)w.push('⚠ 设置里 Use main segment only 已开，编号会经分段变换，请关闭后再调');
+ if(j.ovr)w.push('⚠ Live override 已开，实时数据被忽略，调试无效');
+ $('st').innerHTML='调试中 · 共 '+j.n+' 颗 · 已点亮 '+px().length+' 颗'+(w.length?'<div class="warn">'+w.join('<br>')+'</div>':'');
+ if(j.n&&j.n!=N){N=j.n;build()}}).catch(function(){$('st').textContent='连接失败，检查板子是否在线'});
+ if(!timer)timer=setInterval(send,1000)}
+function stop(){active=false;clearInterval(timer);timer=null;stopAuto();fetch('/leddbg?off=1').catch(function(){});$('st').textContent='已退出，灯 3 秒内恢复原效果'}
+function build(){['grid0','grid1'].forEach(function(id,k){var g=$(id);g.innerHTML='';for(var i=k*48;i<Math.min(N,(k+1)*48);i++){var d=document.createElement('div');d.className='c';d.textContent=i;d.dataset.i=i;g.appendChild(d)}});paint()}
+function paint(){document.querySelectorAll('.c').forEach(function(d){var i=+d.dataset.i;d.classList.toggle('on',mode=='step'?i==cur:sel.has(i));d.classList.toggle('cur',mode=='step'&&i==cur)});$('cur').textContent=cur}
+function setCur(i){cur=((i%N)+N)%N;paint();send()}
+function stopAuto(){if(autoT){clearInterval(autoT);autoT=null;$('auto').classList.remove('on')}}
+function setMode(m){mode=m;document.querySelectorAll('.tab').forEach(function(s){s.classList.toggle('on',s.dataset.m==m)});$('pStep').style.display=m=='step'?'':'none';$('pMulti').style.display=m=='multi'?'':'none';stopAuto();paint()}
+function addRange(s){var m=/^(\d+)\s*-\s*(\d+)$/.exec((s||'').trim());if(!m)return;var a=+m[1],b=+m[2];if(a>b){var x=a;a=b;b=x}for(var i=a;i<=b&&i<N;i++)sel.add(i);setMode('multi');send()}
+document.body.addEventListener('click',function(e){var t=e.target;
+ if(t.classList.contains('c')){var i=+t.dataset.i;if(mode=='step')setCur(i);else{sel.has(i)?sel.delete(i):sel.add(i);paint();send()}}
+ else if(t.classList.contains('sw')){document.querySelectorAll('.sw').forEach(function(s){s.classList.remove('on')});t.classList.add('on');color=t.dataset.c;if(active)send()}
+ else if(t.classList.contains('tab')){setMode(t.dataset.m);send()}
+ else if(t.dataset.r){addRange(t.dataset.r)}
+ else if(t.dataset.z!==undefined){sel.clear();addRange($('z'+t.dataset.z).value)}});
+$('prev').onclick=function(){setCur(cur-1)};$('next').onclick=function(){setCur(cur+1)};
+$('auto').onclick=function(){if(autoT){stopAuto();return}$('auto').classList.add('on');autoT=setInterval(function(){setCur(cur+1)},+$('iv').value)};
+$('iv').onchange=function(){if(autoT){stopAuto();$('auto').click()}};
+$('bri').oninput=function(){if(active)send()};
+$('stop').onclick=stop;
+$('clr').onclick=function(){sel.clear();paint();send()};
+$('inv').onclick=function(){for(var i=0;i<N;i++){sel.has(i)?sel.delete(i):sel.add(i)}paint();send()};
+$('rgo').onclick=function(){addRange($('rng').value)};
+document.addEventListener('keydown',function(e){if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.key=='ArrowRight')setCur(cur+1);else if(e.key=='ArrowLeft')setCur(cur-1);else if(e.key==' '){e.preventDefault();$('auto').click()}});
+var Z=[['A','主灯柱'],['A','底部灯柱'],['A','底座环'],['B','主灯柱'],['B','底部灯柱'],['B','底座环']],rec=$('rec');
+Z.forEach(function(z,k){var tr=document.createElement('tr');tr.innerHTML='<td>'+z[0]+' 管 · '+z[1]+'</td><td><input type="text" id="z'+k+'" placeholder="如 3-40"></td><td><button data-z="'+k+'">试亮</button></td>';rec.appendChild(tr)});
+$('exp').onclick=function(){var s='灯珠位置记录（编号=物理序，0 起）\n';Z.forEach(function(z,k){s+=z[0]+' 管 '+z[1]+'：'+($('z'+k).value||'?')+'\n'});s+='方向备注：';$('out').value=s};
+window.addEventListener('beforeunload',function(){if(active&&navigator.sendBeacon)navigator.sendBeacon('/leddbg?off=1')});
+build();send();
+</script></body></html>
+)lamp";
+
+static uint8_t       dbgMask[32];                 // 256 位，够任何灯数
+static uint8_t       dbgRgb[3] = {255, 255, 255};
+static volatile bool dbgPending = false, dbgOff = false;
+
+// "0,5,7-12" + "RRGGBB"。AsyncTCP 任务写、loop 读——最坏一帧花屏，无害。
+static void dbgParse(const String &px, const String &c) {
+  memset(dbgMask, 0, sizeof(dbgMask));
+  int i = 0, n = px.length();
+  while (i < n) {
+    int j = i; while (j < n && px[j] != ',') j++;
+    String tok = px.substring(i, j); i = j + 1;
+    int dash = tok.indexOf('-');
+    long a, b;
+    if (dash < 0) { a = b = tok.toInt(); }
+    else { a = tok.substring(0, dash).toInt(); b = tok.substring(dash + 1).toInt(); }
+    if (a > b) { long s = a; a = b; b = s; }
+    for (long k = a; k <= b && k < 256; ++k) if (k >= 0) dbgMask[k >> 3] |= 1 << (k & 7);
+  }
+  if (c.length() == 6) {
+    long v = strtol(c.c_str(), nullptr, 16);
+    dbgRgb[0] = (v >> 16) & 0xFF; dbgRgb[1] = (v >> 8) & 0xFF; dbgRgb[2] = v & 0xFF;
+  }
+}
+
+static void dbgApply() {                          // 主循环上下文
+  if (dbgOff) {
+    dbgOff = false; dbgPending = false;
+    if (realtimeMode) realtimeTimeout = millis(); // 下一轮 handleNotifications 退出 realtime
+    return;
+  }
+  dbgPending = false;
+  realtimeLock(3000, REALTIME_MODE_GENERIC);
+  const uint16_t total = strip.getLengthTotal();
+  for (uint16_t i = 0; i < total; ++i) {
+    const bool on = i < 256 && (dbgMask[i >> 3] & (1 << (i & 7)));
+    setRealtimePixel(i, on ? dbgRgb[0] : 0, on ? dbgRgb[1] : 0, on ? dbgRgb[2] : 0, 0);
+  }
+  strip.show();
+}
+
 class LampFxUsermod : public Usermod {
   public:
     void setup() override {
@@ -545,11 +676,27 @@ class LampFxUsermod : public Usermod {
           if (n > 0 && n < (int)sizeof(buf)) request->send(200, "application/json", buf);
           else request->send(500);
         });
+        server.on("/leddebug", HTTP_GET, [](AsyncWebServerRequest *request) {
+          request->send_P(200, "text/html; charset=utf-8", kLedDbgPage);
+        });
+        server.on("/leddbg", HTTP_ANY, [](AsyncWebServerRequest *request) {
+          if (request->hasParam("off")) { dbgOff = true; }
+          else {
+            dbgParse(request->hasParam("px") ? request->getParam("px")->value() : String(),
+                     request->hasParam("c")  ? request->getParam("c")->value()  : String());
+            dbgPending = true;
+          }
+          char buf[64];
+          snprintf(buf, sizeof(buf), "{\"n\":%u,\"mso\":%d,\"ovr\":%d}",
+                   (unsigned)strip.getLengthTotal(), useMainSegmentOnly ? 1 : 0, realtimeOverride ? 1 : 0);
+          request->send(200, "application/json", buf);
+        });
         routeOk = true;
       }
     }
 
     void loop() override {
+      if (dbgPending || dbgOff) dbgApply();   // 灯珠调试页的直写请求
       serviceLocalPipeline();          // 本地完整管线：有 PCM 就出帧，无则空转
       // 数据桥每轮保鲜（同 tick 幂等）：bridge.frame 原本只在 ♪ 效果渲染时
       // 更新，跑原生效果时 /lampdata 与分析仪表拿到的是陈旧全零（实测踩中）。
