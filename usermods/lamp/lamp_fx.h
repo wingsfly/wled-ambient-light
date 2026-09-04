@@ -1102,6 +1102,29 @@ inline void fxSlowAurora(const FxState &st, const AudioFrame &f,
 
 // 统一入口。渲染后**统一施加白平衡** —— 各效果自己不碰它，
 // 否则总有一个会忘，而忘了的那个偏色，看起来像效果设计得难看。
+// 派生氛围区。底座环与底部灯柱不由各效果单独画，统一从主柱派生（v1 通用规则）：
+//   底部灯柱（360°，6 颗）= 主柱最下 20% 的平均色 —— 柱脚向下的延伸；
+//   底座环（12 颗）       = 主柱整体平均色 × 0.6 —— 氛围底光。
+// 主柱全黑时两区同黑，「没声音就熄灯」的验收不受影响。
+// 效果要单独驱动某区（例如拍点沿环跑）时再加显式接口覆盖这里。
+inline void fillZones(const Geometry &g, Rgb *out) {
+    for (int s = 0; s < 2; ++s) {
+        const Side side = (Side)s;
+        long r = 0, gg = 0, b = 0, rf = 0, gf = 0, bf = 0;
+        constexpr int kFoot = MAIN_LEDS / 5;                       // 最下 20%
+        for (uint16_t k = 0; k < MAIN_LEDS; ++k) {
+            const Rgb &c = out[mapPixel(g, side, (float)k / (float)(MAIN_LEDS - 1))];
+            r += c.r; gg += c.g; b += c.b;
+            if (k < kFoot) { rf += c.r; gf += c.g; bf += c.b; }
+        }
+        const Rgb foot{ (uint8_t)(rf / kFoot), (uint8_t)(gf / kFoot), (uint8_t)(bf / kFoot) };
+        const Rgb ring{ (uint8_t)(r * 6 / (MAIN_LEDS * 10)), (uint8_t)(gg * 6 / (MAIN_LEDS * 10)),
+                        (uint8_t)(b * 6 / (MAIN_LEDS * 10)) };
+        for (uint16_t k = 0; k < BOT_LEDS;  ++k) out[zonePixel(g, side, ZONE_BOTTOM, k)] = foot;
+        for (uint16_t k = 0; k < RING_LEDS; ++k) out[zonePixel(g, side, ZONE_RING, k)]   = ring;
+    }
+}
+
 inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
                      const Geometry &g, bool white_balance, float dt_ms, Rgb *out) {
     fxAdvance(st, c, f, dt_ms);      // 状态先推进，无状态的效果不受影响
@@ -1132,6 +1155,7 @@ inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &
         case FX_SPECTRUM_BARS:
         default:             fxSpectrumBars(f, g, out);      break;
     }
+    fillZones(g, out);
     for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
         out[i] = applyWhiteBalance(out[i], white_balance);
 }

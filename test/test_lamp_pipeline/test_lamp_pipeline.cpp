@@ -1128,6 +1128,58 @@ void test_slow_aurora_ignores_the_instantaneous_level(void) {
     TEST_ASSERT_TRUE_MESSAGE(labs(bs - bl) < bs / 8, "极光不该跟着瞬时响度变");
 }
 
+
+// ── 三段物理布局：主柱 / 底部灯柱 / 底座环（2026-09-05 /leddebug 实测） ──
+
+void test_geometry_maps_u_onto_main_column_only(void) {
+    Geometry g;
+    TEST_ASSERT_EQUAL_UINT16(18, mapPixel(g, SIDE_L, 0.0f));   // 主柱底
+    TEST_ASSERT_EQUAL_UINT16(47, mapPixel(g, SIDE_L, 1.0f));   // 主柱顶
+    TEST_ASSERT_EQUAL_UINT16(66, mapPixel(g, SIDE_R, 0.0f));
+    TEST_ASSERT_EQUAL_UINT16(95, mapPixel(g, SIDE_R, 1.0f));
+    // u 均匀扫过时不得落进环/底柱（索引 0..17 / 48..65）
+    for (int k = 0; k <= 100; ++k) {
+        const uint16_t a = mapPixel(g, SIDE_L, k / 100.0f), b = mapPixel(g, SIDE_R, k / 100.0f);
+        TEST_ASSERT_TRUE(a >= 18 && a <= 47);
+        TEST_ASSERT_TRUE(b >= 66 && b <= 95);
+    }
+    TEST_ASSERT_EQUAL_UINT16(0,  zonePixel(g, SIDE_L, ZONE_RING, 0));
+    TEST_ASSERT_EQUAL_UINT16(11, zonePixel(g, SIDE_L, ZONE_RING, 11));
+    TEST_ASSERT_EQUAL_UINT16(12, zonePixel(g, SIDE_L, ZONE_BOTTOM, 0));
+    TEST_ASSERT_EQUAL_UINT16(17, zonePixel(g, SIDE_L, ZONE_BOTTOM, 5));
+    TEST_ASSERT_EQUAL_UINT16(48, zonePixel(g, SIDE_R, ZONE_RING, 0));
+    TEST_ASSERT_EQUAL_UINT16(65, zonePixel(g, SIDE_R, ZONE_BOTTOM, 5));
+    TEST_ASSERT_EQUAL_UINT16(17, zonePixel(g, SIDE_L, ZONE_BOTTOM, 99));   // 越界钳制
+    Geometry rev; rev.s1_reversed = true;
+    TEST_ASSERT_EQUAL_UINT16(47, mapPixel(rev, SIDE_L, 0.0f));  // 反转只翻主柱
+    TEST_ASSERT_EQUAL_UINT16(0,  zonePixel(rev, SIDE_L, ZONE_RING, 0));
+}
+
+void test_zones_derive_from_main_column(void) {
+    Geometry g; FxState st{}; static Rgb px[TOTAL_LEDS];
+    fxRender(FX_SPECTRUM_BARS, st, g_fxcfg, liveFrame(), g, false, 23.22f, px);
+    // 主柱有内容 → 环与底柱各自均匀点亮
+    for (int s = 0; s < 2; ++s) {
+        const Side side = (Side)s;
+        const Rgb r0 = px[zonePixel(g, side, ZONE_RING, 0)], b0 = px[zonePixel(g, side, ZONE_BOTTOM, 0)];
+        TEST_ASSERT_TRUE_MESSAGE(r0.r + r0.g + r0.b > 0, "底座环应从主柱派生出亮度");
+        TEST_ASSERT_TRUE_MESSAGE(b0.r + b0.g + b0.b > 0, "底部灯柱应从主柱派生出亮度");
+        for (uint16_t k = 1; k < RING_LEDS; ++k) {
+            const Rgb c = px[zonePixel(g, side, ZONE_RING, k)];
+            TEST_ASSERT_TRUE_MESSAGE(c.r == r0.r && c.g == r0.g && c.b == r0.b, "环 12 颗应同色");
+        }
+        for (uint16_t k = 1; k < BOT_LEDS; ++k) {
+            const Rgb c = px[zonePixel(g, side, ZONE_BOTTOM, k)];
+            TEST_ASSERT_TRUE_MESSAGE(c.r == b0.r && c.g == b0.g && c.b == b0.b, "底柱 6 颗应同色");
+        }
+    }
+    // 静音：主柱全黑 → 环与底柱同黑（「没声音就熄灯」）
+    AudioFrame silent; FxState st2{};
+    fxRender(FX_SPECTRUM_BARS, st2, g_fxcfg, silent, g, false, 23.22f, px);
+    for (uint16_t i = 0; i < 18; ++i)  TEST_ASSERT_TRUE(px[i].r == 0 && px[i].g == 0 && px[i].b == 0);
+    for (uint16_t i = 48; i < 66; ++i) TEST_ASSERT_TRUE(px[i].r == 0 && px[i].g == 0 && px[i].b == 0);
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_every_module_to_the_same_hop);
@@ -1156,6 +1208,8 @@ int main(int, char **) {
     RUN_TEST(test_key_wash_stays_colourful_without_a_key);
     RUN_TEST(test_spectrum_bars_brightness_follows_the_dynamics);
     RUN_TEST(test_color_flow_hue_span_follows_the_mood);
+    RUN_TEST(test_geometry_maps_u_onto_main_column_only);
+    RUN_TEST(test_zones_derive_from_main_column);
     RUN_TEST(test_color_flow_direction_follows_the_energy_trend);
     RUN_TEST(test_color_flow_speed_follows_the_bpm);
     RUN_TEST(test_color_flow_washes_out_on_a_section_change);
