@@ -418,8 +418,13 @@ void modeLampCommon(FxId id) {
   const uint8_t drift = SEGMENT.check1 ? (uint8_t)(strip.now >> 6) : 0;
   const uint32_t bg = SEGCOLOR(1);         // 暗部用背景色，对齐原生惯例
   unsigned len = SEGLEN;
+  // 段长 ≥ 设计幅面时逐颗直映（多出的像素置黑）；只有段比设计短才重采样。
+  // 此前对 97 颗段（含板载状态灯）也按 i*96/97 重采样，floor 后整条错位一颗——
+  // 三段布局的边界一错位就露馅（底柱首颗显示的是环的末颗）。
+  const Rgb kBlack{0, 0, 0};
   for (unsigned i = 0; i < len; i++) {
-    const Rgb &c = fxOut[(uint32_t)i * span / len];
+    const Rgb &c = (len >= span) ? (i < span ? fxOut[i] : kBlack)
+                                 : fxOut[(uint32_t)i * span / len];
     if (usePal) {
       uint8_t h, s, v;
       rgb2hsv8(c, h, s, v);
