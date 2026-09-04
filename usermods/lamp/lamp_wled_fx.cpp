@@ -478,8 +478,22 @@ void modeLampAuto() {
   if (!autoInited) { autoInit(autoSt, autoCfg, gRenderDt); autoInited = true; }
   autoRetime(autoSt, autoCfg, gRenderDt);
   autoUpdate(autoSt, autoCfg, bridge.frame, millis());
+  // 切换提示：Auto 换效果时底座环白闪 250ms 淡出，让人知道"换了"而不是"坏了"。
+  // 亮度封顶 140、只覆盖环，负载阶跃小（3A 电源下也安全）。
+  static FxId    autoPrev  = autoSt.current;
+  static uint32_t autoCueMs = 0;
+  if (autoSt.current != autoPrev) { autoPrev = autoSt.current; autoCueMs = millis(); }
   lampTrace = 0x11;
   modeLampCommon(autoSt.current);
+  if (autoCueMs) {
+    const uint32_t age = millis() - autoCueMs;
+    if (age < 250) {
+      const uint8_t v = (uint8_t)(140 - age * 140 / 250);
+      for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k)
+          SEGMENT.setPixelColor(zonePixel(geo, (Side)s, ZONE_RING, k), RGBW32(v, v, v, 0));
+    }
+  }
 }
 static const char mLampAuto_data[] PROGMEM = "♪ Auto@Speed,Sensitivity,,,,Palette drift;,Bg;!;1v;si=0";
 

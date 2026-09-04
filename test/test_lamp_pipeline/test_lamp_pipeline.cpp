@@ -1340,6 +1340,32 @@ void test_vocal_halo_ring_follows_vocal_presence(void) {
     TEST_ASSERT_TRUE_MESSAGE(hb.r + hb.g + hb.b > 0, "无人声但有声音时环留待机底光");
 }
 
+
+void test_lyric_pulse_ring_counts_phrases(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS]; FxState st{};
+    AudioFrame f = liveFrame(); f.vocal_onset = false;
+    for (int n = 1; n <= 3; ++n) {
+        f.vocal_onset = true;  fxRender(FX_LYRIC_PULSE, st, g_fxcfg, f, g, false, 23.22f, px);
+        f.vocal_onset = false; fxRender(FX_LYRIC_PULSE, st, g_fxcfg, f, g, false, 23.22f, px);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(n, ringLit(px, g, SIDE_L), "每个唱句开头环应多亮一颗");
+    }
+    for (int n = 4; n <= 13; ++n) {
+        f.vocal_onset = true;  fxRender(FX_LYRIC_PULSE, st, g_fxcfg, f, g, false, 23.22f, px);
+        f.vocal_onset = false; fxRender(FX_LYRIC_PULSE, st, g_fxcfg, f, g, false, 23.22f, px);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, ringLit(px, g, SIDE_L), "第 13 句应清空重来，只亮 1 颗");
+}
+
+void test_melody_line_ring_marks_the_pitch_class(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS]; FxState st{};
+    AudioFrame f = liveFrame(); f.f0_voiced = true; f.f0_hz = 440.0f;      // A4
+    fxRender(FX_MELODY_LINE, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(9, ringBrightest(px, g, SIDE_L), "A 应亮在环第 9 颗");
+    f.f0_hz = 261.63f;                                                     // C4
+    fxRender(FX_MELODY_LINE, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, ringBrightest(px, g, SIDE_L), "C 应亮在环第 0 颗");
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_every_module_to_the_same_hop);
@@ -1381,6 +1407,8 @@ int main(int, char **) {
     RUN_TEST(test_color_flow_hue_varies_around_the_ring);
     RUN_TEST(test_slow_aurora_ring_has_a_wave);
     RUN_TEST(test_vocal_halo_ring_follows_vocal_presence);
+    RUN_TEST(test_lyric_pulse_ring_counts_phrases);
+    RUN_TEST(test_melody_line_ring_marks_the_pitch_class);
     RUN_TEST(test_color_flow_direction_follows_the_energy_trend);
     RUN_TEST(test_color_flow_speed_follows_the_bpm);
     RUN_TEST(test_color_flow_washes_out_on_a_section_change);

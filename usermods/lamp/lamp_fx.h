@@ -231,6 +231,7 @@ struct FxState {
     float voc = 0.0f;             // 人声存在度的再平滑（画面别跟着抖）
     float voc_u = 0.5f;           // 人声光晕的位置（跟 f0 高低）
     float lyric = 0.0f;           // 唱句脉冲的包络
+    int   lyric_count = 0;        // 唱句计数 1..12（底座环数句），13 句清空重来
     float tide = 0.0f;            // 段落潮汐的扫过进度，1→0
     float tide_hue = 0.0f;
     float aur[3] = {0.11f, 0.47f, 0.79f};      // 极光三条相位，互质起点免得同步
@@ -603,7 +604,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
         // 与强拍绽放同一条规矩：没有声音就不起包络。
         // 真实管线里静音时 vocal_onset 不可能为真，但夹具会喂这种组合，
         // 而「静音要熄灭」是硬不变量 —— 在这里挡住比在渲染里挡干净。
-        if (f.vocal_onset && lvl > 0.0f) st.lyric = 1.0f;
+        if (f.vocal_onset && lvl > 0.0f) { st.lyric = 1.0f; st.lyric_count = (st.lyric_count % (int)RING_LEDS) + 1; }
         else st.lyric += envCoeff(c.lyric_tau_ms, dt_ms) * (0.0f - st.lyric);
     }
 
@@ -1300,6 +1301,39 @@ inline void zoneVocalHalo(const FxState &st, const AudioFrame &f, const Geometry
         for (uint16_t k = 0; k < RING_LEDS; ++k) out[zonePixel(g, (Side)s, ZONE_RING, k)] = c;
 }
 
+// 唱句脉冲：环数句——每个唱句开头环多亮一颗，12 句一圈后清空重来；最新那颗随脉冲亮。
+// 没数过句子时留派生（保留"在待命"的底光）。
+inline void zoneLyricPulse(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    if (f.gated || !(f.rms_fast > 0.003f) || st.lyric_count <= 0) return;
+    const int n = st.lyric_count;
+    const float hue = st.key_hue + 0.42f;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            Rgb c{0, 0, 0};
+            if ((int)k < n) {
+                const bool newest = ((int)k == n - 1);
+                c = hsv(hue, 0.6f, newest ? (0.25f + 0.75f * perceptual(st.lyric)) : 0.18f);
+            }
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = c;
+        }
+}
+
+// 旋律线：环上点亮当前旋律音的音级（顺时针 C→B，与音级环同一套色相），
+// 其余颗压到派生底光的 40%，让音级读得出；无声时留派生。
+inline void zoneMelodyLine(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    if (!f.f0_voiced || !(f.f0_hz > 20.0f)) return;
+    const int pc = pitchClassOf(f.f0_hz);
+    if (pc < 0 || pc >= (int)RING_LEDS) return;
+    const Rgb on = hsv((float)pc / (float)kChroma, 0.85f, 0.9f);
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            Rgb &c = out[zonePixel(g, (Side)s, ZONE_RING, k)];
+            if ((int)k == pc) c = on;
+            else c = Rgb{ (uint8_t)(c.r * 2 / 5), (uint8_t)(c.g * 2 / 5), (uint8_t)(c.b * 2 / 5) };
+        }
+    (void)st;
+}
+
 inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
                      const Geometry &g, bool white_balance, float dt_ms, Rgb *out) {
     fxAdvance(st, c, f, dt_ms);      // 状态先推进，无状态的效果不受影响
@@ -1344,6 +1378,8 @@ inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &
         case FX_COLOR_FLOW:     zoneColorFlow(st, f, g, out);     break;
         case FX_SLOW_AURORA:    zoneSlowAurora(st, f, g, out);    break;
         case FX_VOCAL_HALO:     zoneVocalHalo(st, f, g, out);     break;
+        case FX_LYRIC_PULSE:    zoneLyricPulse(st, f, g, out);    break;
+        case FX_MELODY_LINE:    zoneMelodyLine(st, f, g, out);    break;
         default: break;
     }
     for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
