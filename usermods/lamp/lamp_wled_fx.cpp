@@ -25,6 +25,9 @@
 #include "lamp_onset.h"
 #include "lamp_auto.h"
 #include "lamp_pipeline.h"
+#ifndef LAMP_FW_ID
+#define LAMP_FW_ID "dev"
+#endif
 #include "lamp_pcm_tap.h"
 
 namespace {
@@ -714,10 +717,11 @@ class LampFxUsermod : public Usermod {
                      request->hasParam("c")  ? request->getParam("c")->value()  : String());
             dbgPending = true;
           }
-          char buf[96];
-          snprintf(buf, sizeof(buf), "{\"n\":%u,\"t\":%u,\"mso\":%d,\"ovr\":%d,\"src\":\"%s\"}",
+          char buf[128];
+          snprintf(buf, sizeof(buf), "{\"n\":%u,\"t\":%u,\"mso\":%d,\"ovr\":%d,\"src\":\"%s\",\"fw\":\"%s\"}",
                    (unsigned)strip.getLengthTotal(), (unsigned)TOTAL_LEDS, useMainSegmentOnly ? 1 : 0, realtimeOverride ? 1 : 0,
-                   request->client()->remoteIP().toString().c_str());   // 板子看到的客户端 IP：排查转发链路用
+                   request->client()->remoteIP().toString().c_str(),   // 板子看到的客户端 IP：排查转发链路用
+                   LAMP_FW_ID);                                        // 固件标识：确认板上跑的是哪一版
           request->send(200, "application/json", buf);
         });
         routeOk = true;
