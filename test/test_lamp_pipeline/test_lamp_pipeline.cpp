@@ -827,10 +827,10 @@ void test_chroma_ring_maps_pitch_class_not_frequency(void) {
 
     // 亮起的应当集中在管长 7/11 处附近
     int first = -1, last = -1;
-    for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i)
+    for (uint16_t i = MAIN_OFS; i < LEDS_PER_TUBE; ++i)   // 只看主柱：环/底柱是派生区
         if (px[i].r || px[i].g || px[i].b) { if (first < 0) first = i; last = i; }
     TEST_ASSERT_TRUE_MESSAGE(first >= 0, "只有一个音级在响却全黑");
-    const float mid = 0.5f * (first + last) / (float)(LEDS_PER_TUBE - 1);
+    const float mid = 0.5f * (first + last - 2 * MAIN_OFS) / (float)(MAIN_LEDS - 1);
     TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.08f, 7.0f / (kChroma - 1), mid,
         "G 没落在音级环的对应位置");
 }
@@ -848,7 +848,7 @@ void test_chroma_ring_moves_with_the_note(void) {
         FxState st;
         for (int k = 0; k < 40; ++k) fxRender(FX_CHROMA_RING, st, c, f, g, false, 23.22f, px);
         int first = -1, last = -1;
-        for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i)
+        for (uint16_t i = MAIN_OFS; i < LEDS_PER_TUBE; ++i)   // 只看主柱：环/底柱是派生区
             if (px[i].r || px[i].g || px[i].b) { if (first < 0) first = i; last = i; }
         centers[pc] = (first < 0) ? -1 : (first + last) / 2;
     }
