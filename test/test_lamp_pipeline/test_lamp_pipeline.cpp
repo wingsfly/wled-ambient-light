@@ -1228,6 +1228,118 @@ void test_bar_ladder_ring_counts_beats(void) {
     }
 }
 
+
+static int ringLit(const Rgb *px, const Geometry &g, Side side, int thr = 0) {
+    int n = 0;
+    for (uint16_t k = 0; k < RING_LEDS; ++k) {
+        const Rgb c = px[zonePixel(g, side, ZONE_RING, k)];
+        if (c.r + c.g + c.b > thr) ++n;
+    }
+    return n;
+}
+static bool ringUniform(const Rgb *px, const Geometry &g, Side side) {
+    const Rgb a = px[zonePixel(g, side, ZONE_RING, 0)];
+    for (uint16_t k = 1; k < RING_LEDS; ++k) {
+        const Rgb c = px[zonePixel(g, side, ZONE_RING, k)];
+        if (c.r != a.r || c.g != a.g || c.b != a.b) return false;
+    }
+    return true;
+}
+
+void test_chroma_ring_puts_pitch_classes_on_the_ring(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS];
+    AudioFrame f = liveFrame();
+    for (int i = 0; i < kChroma; ++i) f.chroma[i] = 0.0f;
+    f.chroma[7] = 1.0f; f.key_conf = 0.0f; f.key_root = -1;       // 只有 G
+    FxState st{};
+    for (int k = 0; k < 40; ++k) fxRender(FX_CHROMA_RING, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(7, ringBrightest(px, g, SIDE_L), "G 应亮在环第 7 颗");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(7, ringBrightest(px, g, SIDE_R), "两管环一致");
+}
+
+void test_kick_snare_splits_drums_across_zones(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS];
+    AudioFrame f = liveFrame();
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands_p[i] = (i >= NUM_BANDS - 6) ? 0.5f : 0.0f;   // 只有军鼓
+    FxState st{};
+    for (int k = 0; k < 5; ++k) fxRender(FX_KICK_SNARE, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_TRUE_MESSAGE(ringLit(px, g, SIDE_L) == (int)RING_LEDS && ringUniform(px, g, SIDE_L), "军鼓应整圈点亮底座环");
+    const Rgb b = px[zonePixel(g, SIDE_L, ZONE_BOTTOM, 0)];
+    TEST_ASSERT_TRUE_MESSAGE(b.r + b.g + b.b == 0, "没有底鼓时底部灯柱应黑");
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands_p[i] = (i < 4) ? 0.5f : 0.0f;                 // 只有底鼓
+    FxState st2{};
+    for (int k = 0; k < 5; ++k) fxRender(FX_KICK_SNARE, st2, g_fxcfg, f, g, false, 23.22f, px);
+    const Rgb b2 = px[zonePixel(g, SIDE_L, ZONE_BOTTOM, 0)];
+    TEST_ASSERT_TRUE_MESSAGE(b2.r > 0 && b2.r > b2.g && b2.r > b2.b, "底鼓应把底部灯柱点成红");
+}
+
+void test_split_bands_ring_gauges_the_highs(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS];
+    AudioFrame f = liveFrame();
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = (i >= NUM_BANDS - 6) ? 1.0f : 0.0f;
+    FxState st{};
+    for (int k = 0; k < 5; ++k) fxRender(FX_SPLIT_BANDS, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE((int)RING_LEDS, ringLit(px, g, SIDE_L), "高频满格环应全亮");
+    for (int i = 0; i < NUM_BANDS; ++i) f.bands[i] = 0.0f;
+    FxState st2{};
+    for (int k = 0; k < 5; ++k) fxRender(FX_SPLIT_BANDS, st2, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, ringLit(px, g, SIDE_L), "无高频环应全黑");
+}
+
+void test_level_sweep_ring_is_a_meter_with_peak_dot(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS]; FxState st{};
+    AudioFrame f = liveFrame(); f.rms_fast = 0.15f; f.peak = 0.33f;   // lvl≈0.2 → 2 颗；峰≈0.98 → 第 11 颗白
+    fxRender(FX_LEVEL_SWEEP, st, g_fxcfg, f, g, false, 23.22f, px);
+    const Rgb pk = px[zonePixel(g, SIDE_L, ZONE_RING, 11)];
+    TEST_ASSERT_TRUE_MESSAGE(pk.r == 255 && pk.g == 255 && pk.b == 255, "峰值保持点应为白");
+    const Rgb k0 = px[zonePixel(g, SIDE_L, ZONE_RING, 0)], k8 = px[zonePixel(g, SIDE_L, ZONE_RING, 8)];
+    TEST_ASSERT_TRUE_MESSAGE(k0.g > 0 && k0.g >= k0.r, "量表起点应为绿");
+    TEST_ASSERT_TRUE_MESSAGE(k8.r + k8.g + k8.b == 0, "电平之外应黑");
+}
+
+void test_downbeat_bloom_ring_blooms_on_downbeat(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS]; FxState st{};
+    AudioFrame f = liveFrame(); f.downbeat = true; f.onset = true;
+    fxRender(FX_DOWNBEAT_BLOOM, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT_MESSAGE((int)RING_LEDS, ringLit(px, g, SIDE_L), "强拍环应整圈绽放");
+}
+
+void test_section_tide_front_sweeps_the_ring(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS]; FxState st{};
+    AudioFrame f = liveFrame(); f.section_change = true;
+    fxRender(FX_SECTION_TIDE, st, g_fxcfg, f, g, false, 23.22f, px);   // tide=1 → 潮头在 k=0
+    const Rgb a = px[zonePixel(g, SIDE_L, ZONE_RING, 0)], b = px[zonePixel(g, SIDE_L, ZONE_RING, 6)];
+    TEST_ASSERT_TRUE_MESSAGE(a.r + a.g + a.b > b.r + b.g + b.b, "潮头处应比环对侧亮");
+}
+
+void test_color_flow_hue_varies_around_the_ring(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS]; FxState st{};
+    AudioFrame f = liveFrame(); f.mood = 1.0f;                        // 整条彩虹
+    for (int k = 0; k < 5; ++k) fxRender(FX_COLOR_FLOW, st, g_fxcfg, f, g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT((int)RING_LEDS, ringLit(px, g, SIDE_L));
+    TEST_ASSERT_FALSE_MESSAGE(ringUniform(px, g, SIDE_L), "躁时色相应绕环变化");
+}
+
+void test_slow_aurora_ring_has_a_wave(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS]; FxState st{};
+    for (int k = 0; k < 5; ++k) fxRender(FX_SLOW_AURORA, st, g_fxcfg, liveFrame(), g, false, 23.22f, px);
+    TEST_ASSERT_EQUAL_INT((int)RING_LEDS, ringLit(px, g, SIDE_L));
+    TEST_ASSERT_FALSE_MESSAGE(ringUniform(px, g, SIDE_L), "极光环应有明暗起伏");
+}
+
+void test_vocal_halo_ring_follows_vocal_presence(void) {
+    Geometry g; static Rgb px[TOTAL_LEDS];
+    AudioFrame hi = liveFrame(), lo = liveFrame(); hi.vocal = 0.95f; lo.vocal = 0.0f;
+    FxState a{}, b{};
+    for (int k = 0; k < 60; ++k) fxRender(FX_VOCAL_HALO, a, g_fxcfg, hi, g, false, 23.22f, px);
+    const Rgb ha = px[zonePixel(g, SIDE_L, ZONE_RING, 0)];
+    TEST_ASSERT_TRUE_MESSAGE(ringUniform(px, g, SIDE_L), "人声环应整圈同色");
+    for (int k = 0; k < 60; ++k) fxRender(FX_VOCAL_HALO, b, g_fxcfg, lo, g, false, 23.22f, px);
+    const Rgb hb = px[zonePixel(g, SIDE_L, ZONE_RING, 0)];
+    TEST_ASSERT_TRUE_MESSAGE(ha.r + ha.g + ha.b > hb.r + hb.g + hb.b, "有人声时环应更亮");
+    TEST_ASSERT_TRUE_MESSAGE(hb.r + hb.g + hb.b > 0, "无人声但有声音时环留待机底光");
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_init_sets_every_module_to_the_same_hop);
@@ -1260,6 +1372,15 @@ int main(int, char **) {
     RUN_TEST(test_zones_derive_from_main_column);
     RUN_TEST(test_beat_pulse_ring_dot_follows_the_phase);
     RUN_TEST(test_bar_ladder_ring_counts_beats);
+    RUN_TEST(test_chroma_ring_puts_pitch_classes_on_the_ring);
+    RUN_TEST(test_kick_snare_splits_drums_across_zones);
+    RUN_TEST(test_split_bands_ring_gauges_the_highs);
+    RUN_TEST(test_level_sweep_ring_is_a_meter_with_peak_dot);
+    RUN_TEST(test_downbeat_bloom_ring_blooms_on_downbeat);
+    RUN_TEST(test_section_tide_front_sweeps_the_ring);
+    RUN_TEST(test_color_flow_hue_varies_around_the_ring);
+    RUN_TEST(test_slow_aurora_ring_has_a_wave);
+    RUN_TEST(test_vocal_halo_ring_follows_vocal_presence);
     RUN_TEST(test_color_flow_direction_follows_the_energy_trend);
     RUN_TEST(test_color_flow_speed_follows_the_bpm);
     RUN_TEST(test_color_flow_washes_out_on_a_section_change);

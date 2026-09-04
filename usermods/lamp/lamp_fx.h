@@ -765,25 +765,30 @@ inline void fxChromaRing(const FxState &st, const AudioFrame &f,
 //   氛围 mood  → 色相跨度（静：几乎单色的渐变；躁：整条彩虹）与饱和度
 //   能量走向   → 流动方向与快慢（在 fxAdvance 里）
 //   换段       → 一次全管泛白，像翻页
-inline void fxColorFlow(const FxState &st, const AudioFrame &f,
-                        const Geometry &g, Rgb *out) {
+// 彩色流动的四个参数，柱与底座环共用。
+//   色相跨度/饱和度由 mood 定（底饱和 0.75 起步：WS2812 上 S<0.6 发粉白，
+//   "鲜艳"是这个效果的脸面，静躁之分交给色相跨度去讲）；
+//   亮度基线走慢包络、快包络只留呼吸，静音时双双归零，整管照样熄灭；
+//   底色跟调性走，没调性时用色相流动自己的相位。
+struct FlowParams { float base, span, sat, lvl; };
+inline FlowParams flowParams(const FxState &st, const AudioFrame &f) {
     float mo = isfinite(f.mood) ? f.mood : 0.0f;
     if (mo < 0.0f) mo = 0.0f; if (mo > 1.0f) mo = 1.0f;
-    const float span = 0.10f + 0.80f * mo;      // 色相跨度
-    // 底饱和 0.75 起步：WS2812 上 S<0.6 已经发粉白，"鲜艳"是这个效果的脸面，
-    // 静躁之分交给色相跨度去讲。
-    const float sat  = 0.75f + 0.25f * mo;
-
-    // 亮度基线走慢包络，快包络只留呼吸。"正比于电平"的约束仍成立：
-    // 静音时慢快包络双双归零，整管照样熄灭。
+    FlowParams p;
+    p.span = 0.10f + 0.80f * mo;
+    p.sat  = 0.75f + 0.25f * mo;
     float lvl = (f.rms_slow * 2.0f + f.rms_fast * 0.5f) * kFxLevelScale;
     if (!isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
     if (lvl > 1.0f) lvl = 1.0f;
+    p.lvl  = lvl;
+    p.base = (f.key_root >= 0 && f.key_conf > 0.15f) ? (float)f.key_root / (float)kChroma : st.key_hue;
+    return p;
+}
 
-    // 底色跟调性走，没调性时用色相流动自己的相位
-    const float base = (f.key_root >= 0 && f.key_conf > 0.15f)
-                     ? (float)f.key_root / (float)kChroma : st.key_hue;
-
+inline void fxColorFlow(const FxState &st, const AudioFrame &f,
+                        const Geometry &g, Rgb *out) {
+    const FlowParams fp = flowParams(st, f);
+    const float span = fp.span, sat = fp.sat, lvl = fp.lvl, base = fp.base;
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
             const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
@@ -1173,6 +1178,128 @@ inline void zoneBarLadder(const FxState &st, const AudioFrame &f, const Geometry
         }
 }
 
+// 音级环：底座环 12 颗 = 12 个音级，顺时针 C→B。与柱同一套亮度/主音白边约定。
+inline void zoneChromaRing(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            const int  pc   = (int)k;                         // RING_LEDS == kChroma
+            const bool root = (f.key_root == pc && f.key_conf > 0.3f);
+            const float v   = perceptual(st.chroma[pc]) * (root ? 1.0f : 0.82f);
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = hsv((float)pc / kChroma, root ? 0.55f : 0.9f, v);
+        }
+}
+
+// 鼓组分离的三段分工：底鼓在底部灯柱（深红）、军鼓/镲闪底座环（米黄）——与柱的两色一致。
+inline void zoneKickSnare(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    const Rgb kick  = hsv(0.99f, 0.95f, perceptual(st.kick));
+    const Rgb snare = hsv(0.13f, 0.55f, perceptual(st.snare));
+    for (int s = 0; s < 2; ++s) {
+        for (uint16_t k = 0; k < BOT_LEDS;  ++k) out[zonePixel(g, (Side)s, ZONE_BOTTOM, k)] = kick;
+        for (uint16_t k = 0; k < RING_LEDS; ++k) out[zonePixel(g, (Side)s, ZONE_RING, k)]   = snare;
+    }
+    (void)f;
+}
+
+// 高低分离：底座环是高频能量的环形量表（顺时针填充，青色），底部柱由柱脚派生（低频红）。
+inline void zoneSplitBands(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    float hi = 0.0f;
+    for (int i = NUM_BANDS - 6; i < NUM_BANDS; ++i) hi += st.bar[i];
+    hi /= 6.0f;
+    const int lit = (int)(hi * (float)RING_LEDS + 0.5f);
+    const Rgb c = hsv(0.55f, 0.9f, perceptual(hi));
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k)
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = ((int)k < lit) ? c : Rgb{0, 0, 0};
+    (void)f;
+}
+
+// 电平扫描：底座环是环形电平表（绿→红顺时针填充），白点为峰值保持。
+inline void zoneLevelSweep(const AudioFrame &f, const Geometry &g, Rgb *out) {
+    const float lvl = perceptual(f.rms_fast * kFxLevelScale);
+    const float pk  = perceptual(f.peak * kFxLevelScale);
+    const int lit = (int)(lvl * (float)RING_LEDS + 0.5f);
+    const int kpk = (pk > 0.02f) ? (int)(pk * (float)(RING_LEDS - 1) + 0.5f) : -1;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            Rgb c{0, 0, 0};
+            if ((int)k == kpk)      c = Rgb{255, 255, 255};
+            else if ((int)k < lit)  c = hsv(0.33f - 0.33f * (float)k / (float)RING_LEDS, 0.95f, 1.0f);
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = c;
+        }
+}
+
+// 强拍绽放：强拍整圈绽放；弱拍在环上"当前拍位"点一颗反色涟漪——环顺带显示走到小节第几拍。
+inline void zoneDownbeatBloom(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    const float b = perceptual(st.bloom), r = perceptual(st.ripple);
+    if (b <= 0.0f && r <= 0.0f) return;                 // 留派生（此时柱也黑）
+    int n = f.beats_per_bar;
+    if (n < 2) n = 4;
+    if (n > 8) n = 8;
+    const int pos  = (f.bar_pos >= 0 && f.bar_pos < n) ? f.bar_pos : 0;
+    const int kdot = pos * (int)RING_LEDS / n;
+    const Rgb bloom = hsv(st.hue, 0.85f, b);
+    const Rgb dot   = hsv(st.hue + 0.5f, 0.85f, r * 0.55f);
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            Rgb c = bloom;
+            if ((int)k == kdot) c = Rgb{ c.r > dot.r ? c.r : dot.r, c.g > dot.g ? c.g : dot.g, c.b > dot.b ? c.b : dot.b };
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = c;
+        }
+}
+
+// 段落潮汐：潮头同步绕环扫一圈，潮头之后新色、之前旧色——与柱同一套公式。
+inline void zoneSectionTide(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    if (f.gated || !(f.rms_fast > 0.003f) || st.tide <= 0.0f) return;   // 平时留派生
+    const float lvl = 0.12f + 0.88f * perceptual(f.rms_fast * kFxLevelScale);
+    const float front = 1.0f - st.tide;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            const float u = (float)k / (float)RING_LEDS;
+            const float hue = (u <= front) ? st.tide_hue : st.tide_hue - 0.31f;
+            const float edge = 1.0f - fabsf(u - front) * 6.0f;
+            const float boost = (edge > 0.0f) ? edge : 0.0f;
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = hsv(hue, 0.65f, lvl * (0.7f + 0.3f * boost) + 0.3f * boost);
+        }
+}
+
+// 彩色流动：色相同步绕环流动（同一相位、同一跨度），亮度略低于柱做底光。
+inline void zoneColorFlow(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    const FlowParams fp = flowParams(st, f);
+    if (fp.lvl <= 0.0f) return;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            const float u = (float)k / (float)RING_LEDS;
+            const float h = fp.base + st.flow + fp.span * u;
+            const float v = fp.lvl * (0.6f + 0.4f * fp.lvl) * 0.8f;
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] =
+                hsv(h, fp.sat * (1.0f - 0.7f * st.sect), v + 0.6f * st.sect * (1.0f - v));
+        }
+}
+
+// 极光：一条极光波（柱上三条之一）绕环慢转，色调随 mood 冷暖。
+inline void zoneSlowAurora(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    if (f.gated || !(f.rms_fast > 0.003f)) return;
+    float m = f.mood;
+    if (!isfinite(m)) m = 0.5f;
+    if (m < 0.0f) m = 0.0f; if (m > 1.0f) m = 1.0f;
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) {
+            const float u = (float)k / (float)RING_LEDS;
+            const float w = 0.5f + 0.5f * sinf(6.2831853f * (st.aur[0] + u));
+            const float hue = 0.45f - 0.25f * m + 0.10f * w;
+            out[zonePixel(g, (Side)s, ZONE_RING, k)] = hsv(hue, 0.55f + 0.2f * m, 0.08f + 0.45f * w * w);
+        }
+}
+
+// 人声光晕：底座环亮度跟随人声存在度——聚光灯的底座。待机 10% 与柱同规矩。
+inline void zoneVocalHalo(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
+    if (f.gated || !(f.rms_fast > 0.003f)) return;
+    const float lvl = 0.10f + 0.90f * st.voc;
+    const Rgb c = hsv(st.key_hue + 0.08f, 0.45f, perceptual(lvl) * 0.8f);
+    for (int s = 0; s < 2; ++s)
+        for (uint16_t k = 0; k < RING_LEDS; ++k) out[zonePixel(g, (Side)s, ZONE_RING, k)] = c;
+}
+
 inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &f,
                      const Geometry &g, bool white_balance, float dt_ms, Rgb *out) {
     fxAdvance(st, c, f, dt_ms);      // 状态先推进，无状态的效果不受影响
@@ -1205,8 +1332,18 @@ inline void fxRender(FxId id, FxState &st, const FxConfig &c, const AudioFrame &
     }
     fillZones(g, out);
     switch (id) {                                   // 三段专属行为覆盖派生默认
-        case FX_BEAT_PULSE: zoneBeatPulse(st, f, g, out); break;
-        case FX_BAR_LADDER: zoneBarLadder(st, f, g, out); break;
+        case FX_BEAT_PULSE:     zoneBeatPulse(st, f, g, out);     break;
+        case FX_BEAT_RUNNER:    zoneBeatPulse(st, f, g, out);     break;   // 同相位光点绕环
+        case FX_BAR_LADDER:     zoneBarLadder(st, f, g, out);     break;
+        case FX_CHROMA_RING:    zoneChromaRing(st, f, g, out);    break;
+        case FX_KICK_SNARE:     zoneKickSnare(st, f, g, out);     break;
+        case FX_SPLIT_BANDS:    zoneSplitBands(st, f, g, out);    break;
+        case FX_LEVEL_SWEEP:    zoneLevelSweep(f, g, out);        break;
+        case FX_DOWNBEAT_BLOOM: zoneDownbeatBloom(st, f, g, out); break;
+        case FX_SECTION_TIDE:   zoneSectionTide(st, f, g, out);   break;
+        case FX_COLOR_FLOW:     zoneColorFlow(st, f, g, out);     break;
+        case FX_SLOW_AURORA:    zoneSlowAurora(st, f, g, out);    break;
+        case FX_VOCAL_HALO:     zoneVocalHalo(st, f, g, out);     break;
         default: break;
     }
     for (uint16_t i = 0; i < TOTAL_LEDS; ++i)
