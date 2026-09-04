@@ -691,9 +691,10 @@ class LampFxUsermod : public Usermod {
                      request->hasParam("c")  ? request->getParam("c")->value()  : String());
             dbgPending = true;
           }
-          char buf[64];
-          snprintf(buf, sizeof(buf), "{\"n\":%u,\"t\":%u,\"mso\":%d,\"ovr\":%d}",
-                   (unsigned)strip.getLengthTotal(), (unsigned)TOTAL_LEDS, useMainSegmentOnly ? 1 : 0, realtimeOverride ? 1 : 0);
+          char buf[96];
+          snprintf(buf, sizeof(buf), "{\"n\":%u,\"t\":%u,\"mso\":%d,\"ovr\":%d,\"src\":\"%s\"}",
+                   (unsigned)strip.getLengthTotal(), (unsigned)TOTAL_LEDS, useMainSegmentOnly ? 1 : 0, realtimeOverride ? 1 : 0,
+                   request->client()->remoteIP().toString().c_str());   // 板子看到的客户端 IP：排查转发链路用
           request->send(200, "application/json", buf);
         });
         routeOk = true;

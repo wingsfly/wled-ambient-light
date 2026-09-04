@@ -528,7 +528,7 @@ void initServer()
 
       // Privilege checks
       IPAddress client  = request->client()->remoteIP();
-      if (((otaSameSubnet && !inSameSubnet(client)) && !strlen(settingsPIN)) || (!otaSameSubnet && !inLocalSubnet(client))) {        
+      if (!otaAnySource && (((otaSameSubnet && !inSameSubnet(client)) && !strlen(settingsPIN)) || (!otaSameSubnet && !inLocalSubnet(client)))) {        
         DEBUG_PRINTLN(F("Attempted OTA update from different/non-local subnet!"));
         serveMessage(request, 401, FPSTR(s_accessdenied), F("Client is not on local subnet."), 254);
         setOTAReplied(request);
@@ -576,7 +576,7 @@ void initServer()
     if (index == 0) {
       // Privilege checks
       IPAddress client = request->client()->remoteIP();
-      if (((otaSameSubnet && !inSameSubnet(client)) && !strlen(settingsPIN)) || (!otaSameSubnet && !inLocalSubnet(client))) {
+      if (!otaAnySource && (((otaSameSubnet && !inSameSubnet(client)) && !strlen(settingsPIN)) || (!otaSameSubnet && !inLocalSubnet(client)))) {
         DEBUG_PRINTLN(F("Attempted bootloader update from different/non-local subnet!"));
         serveMessage(request, 401, FPSTR(s_accessdenied), F("Client is not on local subnet."), 254);
         setBootloaderOTAReplied(request);
@@ -772,7 +772,7 @@ void serveSettings(AsyncWebServerRequest* request, bool post) {
 
   if (post) { //settings/set POST request, saving
     IPAddress client = request->client()->remoteIP();
-    if (!inLocalSubnet(client)) { // includes same subnet check
+    if (!otaAnySource && !inLocalSubnet(client)) { // includes same subnet check; lamp fork: any-src 开关可跳过
       serveMessage(request, 401, FPSTR(s_accessdenied), FPSTR(s_redirecting), 123);
       return;
     }
