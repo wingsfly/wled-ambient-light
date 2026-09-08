@@ -1,0 +1,18 @@
+# Mac 端 sender 的运行依赖。
+#
+# 版本是 2026-09-08 从**正在跑的那套环境**里读出来的（macbook-m4-max /
+# Python 3.12.9），不是解出来的 lock —— 传递依赖没有锁定，重建时 pip 会
+# 自己解。CLAP 首次加载要联网拉权重（630k-audioset-best.pt + roberta-base）；
+# 之后 launchd 用 HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 跑离线。
+#
+# numpy 卡在 1.x：laion_clap 这条依赖链（numba/librosa）当时还没跟上 numpy 2。
+numpy==1.26.4
+sounddevice==0.5.6
+
+# 语义情绪（可选）。装不上时 sender 会自动降级，只用管线的能量近似。
+laion_clap==1.1.7
+torch==2.13.0
+torchaudio==2.11.0
+transformers==5.16.1
+librosa==0.11.0
+soundfile==0.14.0
