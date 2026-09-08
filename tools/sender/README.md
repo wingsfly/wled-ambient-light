@@ -23,6 +23,7 @@ plist 模板、`requirements.txt`、`liblamp.dylib`。然后在目标机上：
 ```bash
 cd ~/.local/wled-sync
 ./run.sh venv                                  # 建 venv 装依赖，要联网，torch 约 1GB
+./run.sh warm                                  # 预取 CLAP 权重，约 2.2GB，冷机器必做
 echo 'xxx.local,192.168.x.x' > target.conf     # 灯的地址，见下
 ./run.sh install                               # 渲染 plist、加载、开机自启
 ```
@@ -70,10 +71,26 @@ PersonalServices 的 inventory 给这台机器标的约束是 `temporary-workloa
 两条路，都得人来定：把这台机器的角色改掉，或者把服务搬到 `persistent-service`
 角色的机器上（那台得有 BlackHole 和能听见的音频源）。在定下来之前，这里如实记着。
 
-## CLAP 权重
+## CLAP 权重（不在这个仓库里，也不该在）
 
-语义情绪用 laion_clap 的默认权重（`630k-audioset-best.pt` + `roberta-base`），
-首次加载时从 HuggingFace 拉到 `~/.cache/huggingface`。plist 里设了
-`HF_HUB_OFFLINE=1` 和 `TRANSFORMERS_OFFLINE=1`，所以**缓存必须先热**：
-新机器上第一次要么手工跑一次 sender 让它联网下载，要么把缓存目录拷过去。
-装不上或加载失败时 sender 会自动降级，只用管线的能量近似，不会崩。
+仓库里跟踪的最大文件是两个 92K / 392K 的 dylib，没有任何模型权重。语义情绪那部分
+要两块东西，都不是 pip 依赖，是 laion_clap 在**第一次 `load_ckpt()` 时现下的**：
+
+| 权重 | 体积 | 落在哪 |
+| --- | --- | --- |
+| `630k-audioset-best.pt`（音频分支） | 1.7G | venv 里 `laion_clap` 的包目录，直接 wget 下来的 |
+| `roberta-base`（文本编码器） | 478M | `~/.cache/huggingface`，走 transformers |
+
+所以 `run.sh venv` 建完 venv **还没有权重**，而 plist 里设了 `HF_HUB_OFFLINE=1`
+和 `TRANSFORMERS_OFFLINE=1` —— launchd 起的进程拉不动 roberta-base。冷机器上不先跑
+`./run.sh warm`，CLAP 会加载失败并**静默降级**：sender 照常跑，mood 只剩管线的
+能量近似，日志里看不到 `CLAP 就绪`。这是最容易在新机器上踩到的一脚。
+
+`warm` 会 `cd` 到部署目录再下载：python-wget 把半截文件写在当前目录，
+中断一次就留个几百 MB 的 `.tmp`（macbook-m4-max 的仓库根上那个 217M 的就是这么来的，
+是垃圾，可以删）。那台机器上音频 ckpt 还在 HF 缓存里另存了一份，两处加起来白占 1.7G。
+
+不把权重收进仓库的理由：单个文件 1.7G，git 存不住也没必要 —— 它是可重新下载的
+第三方产物，`requirements.txt` 钉了 `laion_clap==1.1.7`，`load_ckpt()` 默认取的
+就是同一个 `630k-audioset-best.pt`。真要离线复现，把 venv 的 `laion_clap` 包目录和
+`~/.cache/huggingface/hub/models--roberta-base` 一起拷到新机器，比走 git 快得多。
