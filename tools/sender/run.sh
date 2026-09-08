@@ -2,6 +2,7 @@
 # 在**目标机**上装/管 wled-sync（Mac 端 sender）这个 launchd 常驻服务。
 #
 #   ./run.sh venv       首次：建 venv 装依赖（要联网，torch 约 1GB，慢）
+#   ./run.sh warm       首次：联网预取 CLAP 权重（约 2.2GB，plist 是离线模式）
 #   ./run.sh install    渲染 plist → ~/Library/LaunchAgents → 加载
 #   ./run.sh start | stop | restart | status | log | rotate | uninstall
 #   ./run.sh render     只把 plist 打到 stdout（看渲染结果，不落盘）
@@ -74,6 +75,25 @@ rotate() {
 started() { launchctl print "gui/$UID_/$LABEL" >/dev/null 2>&1; }
 
 case "${1:-status}" in
+warm)
+  # CLAP 的权重**不在 venv 的依赖里**，也不在仓库里：laion_clap 是在第一次
+  # load_ckpt() 时现下的（音频 ckpt 直接 wget 进它自己的包目录，文本编码器
+  # roberta-base 走 HF 缓存）。而 plist 里是离线模式，launchd 起的进程拉不动 ——
+  # 冷机器上不先跑这一步，CLAP 会静默降级，只剩管线的能量近似。
+  py=$(python_bin)
+  if [ -z "$py" ]; then echo "找不到解释器：先跑 ./run.sh venv" >&2; exit 1; fi
+  echo "联网预取 CLAP 权重（约 2.2GB：音频 ckpt 1.7G + roberta-base 478M），慢，别中断"
+  # cd 到 $DEST：python-wget 把半截文件写在当前目录，中断过一次就会留个几百 MB
+  # 的 .tmp 在那儿（仓库根上那个 217MB 的就是这么来的）。
+  cd "$DEST"
+  env -u HF_HUB_OFFLINE -u TRANSFORMERS_OFFLINE "$py" - <<'WARM_PY'
+import laion_clap
+m = laion_clap.CLAP_Module(enable_fusion=False)
+m.load_ckpt()
+m.get_text_embedding(["warm up"], use_tensor=False)
+print("CLAP 权重就绪")
+WARM_PY
+  ;;
 venv)
   py=${PYTHON_BIN:-python3}
   echo "用 $py（$($py -V 2>&1)）建 venv 到 $DEST/venv"
@@ -117,9 +137,10 @@ apply)
   else
     echo "还没装过。首次步骤："
     echo "  1) cd $DEST && ./run.sh venv"
-    echo "  2) echo '<灯的地址>' > $DEST/target.conf   # 例如 xxx.local,192.168.x.x"
-    echo "  3) ./run.sh install"
+    echo "  2) ./run.sh warm                          # 预取 CLAP 权重，冷机器必做"
+    echo "  3) echo '<灯的地址>' > $DEST/target.conf   # 例如 xxx.local,192.168.x.x"
+    echo "  4) ./run.sh install"
   fi
   ;;
-*) echo "用法: $0 {venv|install|start|stop|restart|status|log|rotate|render|uninstall|apply}" >&2; exit 2 ;;
+*) echo "用法: $0 {venv|warm|install|start|stop|restart|status|log|rotate|render|uninstall|apply}" >&2; exit 2 ;;
 esac
