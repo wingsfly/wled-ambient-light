@@ -37,6 +37,13 @@ struct ConsoleView: View {
             // Finder 都报零），所以让视图自己留个时间戳，远程才验证得了。
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "consoleShownAt")
         }
+        .onChange(of: statusSummary, initial: true) { _, s in
+            UserDefaults.standard.set(s, forKey: "consoleStatus")
+        }
+        .onChange(of: model.error, initial: true) { _, e in
+            // 错误只在窗口顶部飘一下，ssh 下看不见 —— 单独留一份
+            UserDefaults.standard.set(e ?? "", forKey: "consoleError")
+        }
         .frame(minWidth: 720, minHeight: 520)
     }
 
@@ -73,6 +80,18 @@ struct ConsoleView: View {
             }
         }
         .listStyle(.sidebar)
+    }
+
+    /// 控制台连上了谁、读到了什么。窗口开着时才有意义，ssh 下查：
+    ///   defaults read com.hjma.lamp.sender consoleStatus
+    private var statusSummary: String {
+        guard let d = model.selected else { return "未选设备" }
+        guard let i = model.info else { return "\(d.host) 连接中…" }
+        // 带上会变的量：别处改了灯，这里跟着动才说明 WebSocket 是活的
+        let st = model.state
+        let live = "电源 \(st?.on == true ? "开" : "关") · 亮度 \(st?.bri ?? -1) · 效果 \(st?.primary?.fx ?? -1)"
+        return "\(d.name) @ \(d.host) · 固件 \(i.ver ?? "?") · "
+             + "\(model.effects.count) 效果 / \(model.palettes.count) 调色板 / \(model.presets.count) 预设 · \(live)"
     }
 
     private func addManual() {
