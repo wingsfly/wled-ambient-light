@@ -13,7 +13,7 @@ struct ConsoleView: View {
     @AppStorage("consoleSidebar") private var showSidebar = true
 
     enum Page: String, CaseIterable, Identifiable {
-        case control = "控制", presets = "预设", segments = "分段"
+        case control = "控制", presets = "预设", segments = "分区"
         case analyzer = "诊断", settings = "设置"
         var id: String { rawValue }
         var icon: String {
