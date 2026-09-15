@@ -20,6 +20,10 @@ struct ConsoleControl: View {
                     .frame(minWidth: 290)
                 effectPane.frame(minWidth: 230)
             }
+            // 轮询的开关必须挂在整页上。挂在仪表自己身上就成了死循环：
+            // 没数据 → 不渲染仪表 → onAppear 不触发 → 不开轮询 → 永远没数据。
+            .onAppear { model.startTelemetry() }
+            .onDisappear { model.stopTelemetry() }
         }
     }
 
@@ -67,17 +71,26 @@ struct ConsoleControl: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let t = model.telemetry { meters(t) }
+            meters
         }
     }
 
-    /// 仪表在界面显示时才拉（10 Hz），切走就停 —— 别让一个后台窗口一直问灯要数据。
-    private func meters(_ t: LampTelemetry) -> some View {
+    /// 实时仪表。10 Hz 轮询由整页的 onAppear 管，切走就停 —— 别让一个后台
+    /// 窗口一直问灯要数据。
+    @ViewBuilder
+    private var meters: some View {
         group("实时") {
-            AnalyzerPanel(telemetry: t, compact: true)
+            if let t = model.telemetry {
+                AnalyzerPanel(telemetry: t, compact: true)
+            } else {
+                // 说清楚是在等什么，别让空白看起来像坏了
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取分析数据…").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(height: 60)
+            }
         }
-        .onAppear { model.startTelemetry() }
-        .onDisappear { model.stopTelemetry() }
     }
 
     private func sourceLabel(_ s: EffectiveSource) -> String {
@@ -95,8 +108,10 @@ struct ConsoleControl: View {
             filterBar.padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 8)
             Divider()
             ScrollView { effectList.padding(14) }
+                .frame(maxHeight: .infinity)
             Divider()
-            docArea
+            // 固定高度，否则上面的列表会把它压成一行 —— 五段说明一行装不下
+            docArea.frame(height: currentDoc == nil ? 76 : 208)
         }
     }
 
@@ -211,7 +226,6 @@ struct ConsoleControl: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: 220)
     }
 
     private static let docLabels = ["是什么", "怎么动", "参数", "配色", "场合"]
