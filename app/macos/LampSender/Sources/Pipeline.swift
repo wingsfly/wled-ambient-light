@@ -96,7 +96,10 @@ final class Pipeline: ObservableObject {
     private var control: ControlBox?
 
     init() {
-        targetSpec = defaults.string(forKey: "targetSpec") ?? "wled-c4d3a4.local,192.168.24.123"
+        // 默认值不该指向某一台具体的灯 —— 这是个公开仓库，别人 clone 下来
+        // 不该默认往作者的设备发包。wled.local 是 WLED 的通用名；解析不到就
+        // 退回组播，同网段照样送得到，跨网段再手填地址。
+        targetSpec = defaults.string(forKey: "targetSpec") ?? "wled.local"
         inputGain = defaults.object(forKey: "inputGain") as? Double ?? 1.0
         autoStart = defaults.object(forKey: "autoStart") as? Bool ?? true
         clapEnabled = defaults.object(forKey: "clapEnabled") as? Bool ?? true
