@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>LampSender</string>
+  <key>CFBundleDisplayName</key><string>台灯音频同步</string>
+  <key>CFBundleExecutable</key><string>LampSender</string>
+  <key>CFBundleIdentifier</key><string>com.hjma.lamp.sender</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
+  <!-- 菜单栏常驻，不要 Dock 图标与主窗口 -->
+  <key>LSUIElement</key><true/>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>把系统正在播放的音频分析成灯效数据，发送给台灯。音频不离开本机，只发送分析结果。</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>把系统正在播放的音频分析成灯效数据，发送给台灯。音频不离开本机，只发送分析结果。</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>向局域网内的台灯发送灯效同步数据。</string>
+</dict>
+</plist>
