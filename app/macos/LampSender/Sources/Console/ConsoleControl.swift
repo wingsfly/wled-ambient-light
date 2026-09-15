@@ -16,9 +16,9 @@ struct ConsoleControl: View {
         } else {
             HSplitView {
                 ScrollView { controls.padding(16).frame(maxWidth: .infinity, alignment: .leading) }
-                    .frame(minWidth: 320)
+                    .frame(minWidth: 290)
                 ScrollView { effectPicker.padding(16) }
-                    .frame(minWidth: 240)
+                    .frame(minWidth: 210)
             }
         }
     }

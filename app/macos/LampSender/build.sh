@@ -62,6 +62,13 @@ else
   echo "      ⚠️  没有 $MLSRC —— 语义情绪不可用（见 clap/README.md）"
 fi
 
+# 图标是生成物，不入库（源在 icon/make_icon.swift）。缺了就现画一张。
+if [ ! -f Resources/AppIcon.icns ]; then
+  echo "      生成应用图标"
+  (cd icon && xcrun swift make_icon.swift ../Resources >/dev/null)
+  (cd Resources && iconutil -c icns AppIcon.iconset -o AppIcon.icns && rm -rf AppIcon.iconset)
+fi
+
 echo "[5/6] 组装 .app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -69,6 +76,7 @@ cp Resources/Info.plist "$APP/Contents/"
 cp "$BUILD/LampSender" "$APP/Contents/MacOS/"
 [ -d "$MLOUT" ] && cp -R "$MLOUT" "$APP/Contents/Resources/"
 [ -f Resources/anchors.json ] && cp Resources/anchors.json "$APP/Contents/Resources/"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 echo "[6/6] 签名"
 # TCC 按 bundle 身份记授权，未签名的 bundle 拿不到音频捕获权限。

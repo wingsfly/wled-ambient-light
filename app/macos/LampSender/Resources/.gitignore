@@ -1,3 +1,7 @@
 # CLAP 模型是生成物，126 MB，不入库 —— 用 clap/export_clap.py 重新生成。
 ClapAudioTower.mlpackage/
 anchors.json
+
+# 图标由 icon/make_icon.swift 生成
+AppIcon.icns
+AppIcon.iconset/

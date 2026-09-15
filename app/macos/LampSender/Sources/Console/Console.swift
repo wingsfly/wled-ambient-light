@@ -26,11 +26,20 @@ struct ConsoleView: View {
 
     var body: some View {
         NavigationSplitView {
-            sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
+            sidebar.navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 320)
         } detail: {
             detail
         }
         .environmentObject(model)
+        // LSUIElement 的 App 默认不进 Dock，也就没法用 Cmd+Tab 切回来。
+        // 控制台是个正经窗口，开着的时候就该露面；关掉再缩回菜单栏。
+        .onAppear { NSApp.setActivationPolicy(.regular) }
+        .onDisappear {
+            // 只有确实没别的窗口了才缩回去 —— 将来多开一个窗口时这里不用改
+            if NSApp.windows.filter({ $0.isVisible && $0.canBecomeMain }).isEmpty {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
         .task {
             model.startDiscovery()
             // ssh 里查不到窗口（CGWindowList 拿不到别的会话的窗口，实测连
@@ -44,7 +53,9 @@ struct ConsoleView: View {
             // 错误只在窗口顶部飘一下，ssh 下看不见 —— 单独留一份
             UserDefaults.standard.set(e ?? "", forKey: "consoleError")
         }
-        .frame(minWidth: 720, minHeight: 520)
+        // 760 = 侧边栏 190 + 详情页最窄 500 + 分隔。低于这个数侧边栏会被挤到
+        // 看不见选项 —— 之前 720 就是这么来的。
+        .frame(minWidth: 760, minHeight: 520)
     }
 
     private var sidebar: some View {
