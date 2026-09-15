@@ -10,25 +10,33 @@ struct ConsoleView: View {
     @StateObject private var model = LampViewModel()
     @State private var page: Page = .control
     @State private var manualHost = ""
+    @AppStorage("consoleSidebar") private var showSidebar = true
 
     enum Page: String, CaseIterable, Identifiable {
-        case control = "控制", presets = "预设", segments = "分段", settings = "设置"
+        case control = "控制", presets = "预设", segments = "分段"
+        case analyzer = "诊断", settings = "设置"
         var id: String { rawValue }
         var icon: String {
             switch self {
             case .control:  return "slider.horizontal.3"
             case .presets:  return "square.grid.2x2"
             case .segments: return "rectangle.split.3x1"
+            case .analyzer: return "waveform.badge.magnifyingglass"
             case .settings: return "gearshape"
             }
         }
     }
 
     var body: some View {
-        NavigationSplitView {
-            sidebar.navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 320)
-        } detail: {
-            detail
+        // 不用 NavigationSplitView：空间不足时它会牺牲侧边栏，把内容压到声明的
+        // 最小宽度以下再裁掉 —— 实测窗口稍微拖窄一点，左边那列就只剩半个字。
+        // 自己摆的话宽度是硬的，压不动。
+        HStack(spacing: 0) {
+            if showSidebar {
+                sidebar.frame(width: 210)
+                Divider()
+            }
+            NavigationStack { detail }
         }
         .environmentObject(model)
         // LSUIElement 的 App 默认不进 Dock，也就没法用 Cmd+Tab 切回来。
@@ -53,9 +61,9 @@ struct ConsoleView: View {
             // 错误只在窗口顶部飘一下，ssh 下看不见 —— 单独留一份
             UserDefaults.standard.set(e ?? "", forKey: "consoleError")
         }
-        // 760 = 侧边栏 190 + 详情页最窄 500 + 分隔。低于这个数侧边栏会被挤到
-        // 看不见选项 —— 之前 720 就是这么来的。
-        .frame(minWidth: 760, minHeight: 520)
+        // 侧边栏 210 固定 + 详情页最窄 500 + 分隔。边栏可以收起，收起后窗口能
+        // 拖到更窄。
+        .frame(minWidth: 720, minHeight: 500)
     }
 
     private var sidebar: some View {
@@ -68,8 +76,9 @@ struct ConsoleView: View {
                                 .fill(model.selected?.id == d.id ? Color.accentColor : .secondary.opacity(0.3))
                                 .frame(width: 7, height: 7)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(d.name).lineLimit(1)
-                                Text(d.host).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                Text(d.name).lineLimit(1).truncationMode(.tail)
+                                Text(d.host).font(.caption2).foregroundStyle(.secondary)
+                                    .lineLimit(1).truncationMode(.middle)
                             }
                             Spacer()
                         }
@@ -78,10 +87,12 @@ struct ConsoleView: View {
                 }
                 // 跨隧道时 mDNS 过不去，手填地址是必备入口而不是兜底
                 HStack(spacing: 4) {
-                    TextField("手填地址", text: $manualHost)
+                    TextField("地址", text: $manualHost)
                         .textFieldStyle(.roundedBorder).font(.caption)
+                        .frame(minWidth: 90)
                         .onSubmit(addManual)
-                    Button("加", action: addManual).disabled(manualHost.isEmpty)
+                    Button("加", action: addManual)
+                        .disabled(manualHost.isEmpty).controlSize(.small)
                 }
             }
             Section("面板") {
@@ -118,12 +129,19 @@ struct ConsoleView: View {
             case .control:  ConsoleControl()
             case .presets:  ConsolePresets()
             case .segments: ConsoleSegments()
+            case .analyzer: ConsoleAnalyzer()
             case .settings: ConsoleSettings()
             }
         }
         .navigationTitle(model.selected?.name ?? "氛围灯")
         .navigationSubtitle(model.selected?.host ?? "未连接")
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { withAnimation(.easeInOut(duration: 0.15)) { showSidebar.toggle() } } label: {
+                    Image(systemName: "sidebar.leading")
+                }
+                .help(showSidebar ? "隐藏边栏" : "显示边栏")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { Task { await model.refresh() } } label: {
                     Image(systemName: "arrow.clockwise")
