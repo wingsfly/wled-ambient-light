@@ -40,6 +40,16 @@
 				<output class="sliderbubble"></output>
 			</div>
 		</div>
+		<!-- lamp fork：音源三态开关。自动 = 远端优先→本地→bridge；Local = 只用板载麦克风/3.5mm；
+		     LAMP1 = 只用 Mac sender 的包，断流不偷偷切回麦克风。写 /json/state 的 {"lamp":{"src":n}}，固件落盘。 -->
+		<div id="srcwrap">
+			<p class="hd">Audio Source</p>
+			<div id="srcsw">
+				<button id="srcm0" class="srcb" onclick="lampSetSrc(0)" title="Auto">Auto</button>
+				<button id="srcm1" class="srcb" onclick="lampSetSrc(1)" title="Local">Local</button>
+				<button id="srcm2" class="srcb" onclick="lampSetSrc(2)" title="LAMP1">LAMP1</button>
+			</div>
+		</div>
 		<iframe id="liveview" src="about:blank"></iframe>
 	</div>
 </div>
@@ -424,7 +434,8 @@ var Z={
 "UDP Sound Sync":"UDP 声音同步","Line-In Jack":"线路输入插孔","Autosave":"自动保存",
 "GEQ Input Level":"GEQ 输入电平",
 "Power Monitor":"电流监测","Bus voltage":"母线电压","Main current":"主路电流",
-"Main power":"主路功率","Lamp FX Data":"灯效数据源","Analyzer":"分析仪表"
+"Main power":"主路功率","Lamp FX Data":"灯效数据源","Analyzer":"分析仪表",
+"Auto":"自动","Local":"本地"
 };
 var LK="lampLang";
 function tx(t){var s=t.nodeValue,m=s.trim();if(m&&Z[m])t.nodeValue=s.replace(m,Z[m]);}
@@ -648,6 +659,36 @@ function buildFlt(){
 setInterval(function(){buildFlt();if(curCat)applyFlt();},600);
 window.addEventListener("scroll",place,true);
 window.addEventListener("resize",place);
+})();
+</script>
+<style>
+/* lamp fork：顶栏音源三态开关 */
+#srcwrap{margin:6px 2px 0;}
+#srcsw{display:flex;gap:4px;}
+.srcb{flex:1;padding:4px 0;font-size:12px;line-height:1.4;border:0;border-radius:6px;cursor:pointer;
+      background:var(--c-2,#333);color:var(--c-f,#fff);opacity:.55;transition:opacity .15s;}
+.srcb:hover{opacity:.85;}
+.srcb.on{opacity:1;background:var(--c-6,#555);font-weight:600;}
+</style>
+<script>
+/* lamp fork：顶栏音源三态。点击写 /json/state，当前值读 /lampdata 的 srcmode。
+   刻意不走 requestJson() —— 那会触发 WLED UI 全局状态重绘，和本项目其它两个
+   自定义面板保持一致的做法。 */
+function lampURL(p){return (typeof getURL==="function")?getURL(p):p;}
+function lampSrcMark(m){
+  for(var i=0;i<3;i++){var b=document.getElementById("srcm"+i);if(b)b.className="srcb"+(i===m?" on":"");}
+}
+function lampSetSrc(m){
+  lampSrcMark(m);                                  // 先反馈，失败时下一次轮询会纠回来
+  fetch(lampURL("/json/state"),{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({lamp:{src:m}})}).catch(function(){});
+}
+(function(){
+  function sync(){
+    fetch(lampURL("/lampdata")).then(function(r){return r.json();})
+      .then(function(d){if(typeof d.srcmode==="number")lampSrcMark(d.srcmode);}).catch(function(){});
+  }
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",sync);else sync();
 })();
 </script>
 </body>
