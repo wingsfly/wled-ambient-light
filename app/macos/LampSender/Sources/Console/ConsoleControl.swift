@@ -8,6 +8,7 @@ import LampKit
 struct ConsoleControl: View {
     @EnvironmentObject private var model: LampViewModel
     @State private var effectFilter = ""
+    @State private var category: EffectCategory?
 
     var body: some View {
         if model.state == nil {
@@ -17,8 +18,7 @@ struct ConsoleControl: View {
             HSplitView {
                 ScrollView { controls.padding(16).frame(maxWidth: .infinity, alignment: .leading) }
                     .frame(minWidth: 290)
-                ScrollView { effectPicker.padding(16) }
-                    .frame(minWidth: 210)
+                effectPane.frame(minWidth: 230)
             }
         }
     }
@@ -118,35 +118,118 @@ struct ConsoleControl: View {
         }
     }
 
-    // ── 右栏：效果与调色板 ────────────────────────────────
+    // ── 右栏：效果、分类、说明 ────────────────────────────
 
-    private var effectPicker: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // 固件里 180 多个效果，没有过滤框就只能靠滚
-            TextField("筛选效果", text: $effectFilter)
-                .textFieldStyle(.roundedBorder)
-            let hits = filtered(model.effects)
-            Text("效果（\(hits.count)/\(model.effects.count)）")
-                .font(.caption).foregroundStyle(.secondary)
-            ForEach(hits, id: \.0) { idx, name in
-                Button { model.setEffect(idx) } label: {
-                    HStack {
-                        Text(name).lineLimit(1)
-                        Spacer()
-                        if model.state?.primary?.fx == idx {
-                            Image(systemName: "checkmark").font(.caption)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(.vertical, 1)
+    private var effectPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            filterBar.padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 8)
+            Divider()
+            ScrollView { effectList.padding(14) }
+            if let doc = currentDoc {
+                Divider()
+                docCard(doc)
             }
         }
     }
 
+    private var filterBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // 固件里两百多个效果，没有过滤框就只能靠滚
+            TextField("筛选效果", text: $effectFilter)
+                .textFieldStyle(.roundedBorder)
+            // 分类只有 ♪ 效果才有（标签取自网页那份 LCAT）；选了分类就等于
+            // 把 WLED 原生那两百多个滤掉了
+            HStack(spacing: 5) {
+                chip("全部", on: category == nil) { category = nil }
+                ForEach(EffectCategory.allCases) { c in
+                    chip(c.title, on: category == c) { category = (category == c) ? nil : c }
+                }
+            }
+        }
+    }
+
+    private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .padding(.horizontal, 9).padding(.vertical, 3)
+                .background(on ? Color.accentColor : Color.secondary.opacity(0.15),
+                            in: Capsule())
+                .foregroundStyle(on ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var effectList: some View {
+        let hits = filtered(model.effects)
+        return VStack(alignment: .leading, spacing: 1) {
+            Text("效果（\(hits.count)/\(model.effects.count)）")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.bottom, 4)
+            ForEach(hits, id: \.0) { idx, name in
+                let isCurrent = model.state?.primary?.fx == idx
+                Button { model.setEffect(idx) } label: {
+                    HStack(spacing: 6) {
+                        Text(name).lineLimit(1)
+                        Spacer(minLength: 4)
+                        // 有说明的效果标出来，免得用户以为点了没反应
+                        if EffectDocs.doc(for: name) != nil {
+                            Image(systemName: "info.circle").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if isCurrent { Image(systemName: "checkmark").font(.caption) }
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(isCurrent ? Color.accentColor.opacity(0.18) : .clear,
+                                in: RoundedRectangle(cornerRadius: 4))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// 当前生效的那个效果的说明。跟着灯走而不是跟着点击走 —— 别处（网页、手机）
+    /// 换了效果，这里的说明也该跟着换。
+    private var currentDoc: EffectDoc? {
+        guard let fx = model.state?.primary?.fx, fx < model.effects.count else { return nil }
+        return EffectDocs.doc(for: model.effects[fx])
+    }
+
+    private func docCard(_ d: EffectDoc) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(d.name).font(.callout.bold())
+                    ForEach(EffectDocs.categories(of: d.name)) { c in
+                        Text(c.title)
+                            .font(.caption2)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                    }
+                }
+                ForEach(Array(d.lines.enumerated()), id: \.offset) { i, line in
+                    HStack(alignment: .top, spacing: 5) {
+                        Text(Self.docLabels[i])
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .frame(width: 30, alignment: .leading)
+                        Text(line).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 220)
+    }
+
+    private static let docLabels = ["是什么", "怎么动", "参数", "配色", "场合"]
+
     private func filtered(_ names: [String]) -> [(Int, String)] {
-        let all = Array(names.enumerated()).map { ($0.offset, $0.element) }
+        var all = Array(names.enumerated()).map { ($0.offset, $0.element) }
+        if let c = category {
+            all = all.filter { EffectDocs.categories(of: $0.1).contains(c) }
+        }
         guard !effectFilter.isEmpty else { return all }
         return all.filter { $0.1.localizedCaseInsensitiveContains(effectFilter) }
     }
