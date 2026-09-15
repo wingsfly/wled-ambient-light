@@ -14,14 +14,14 @@ struct ConsoleView: View {
 
     enum Page: String, CaseIterable, Identifiable {
         case control = "控制", presets = "预设", segments = "分区"
-        case analyzer = "诊断", settings = "设置"
+        case analyzer = "灯珠调试", settings = "设置"
         var id: String { rawValue }
         var icon: String {
             switch self {
             case .control:  return "slider.horizontal.3"
             case .presets:  return "square.grid.2x2"
             case .segments: return "rectangle.split.3x1"
-            case .analyzer: return "waveform.badge.magnifyingglass"
+            case .analyzer: return "lightbulb.led"
             case .settings: return "gearshape"
             }
         }
