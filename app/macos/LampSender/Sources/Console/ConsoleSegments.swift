@@ -19,6 +19,16 @@ struct ConsoleSegments: View {
     private let store = TemplateStore(appName: "LampSender")
     private var template: SegmentTemplate? { templates.first { $0.id == chosen } }
 
+    /// 灯上现在的分段是否就是选中的这个模板。
+    /// 下拉框里选一个模板**不会**写到灯上，得点「应用」—— 这两件事在界面上
+    /// 必须分得清，否则用户选完看下面还是一个分段，会以为坏了。
+    private var applied: Bool {
+        guard let t = template else { return false }
+        let live = (model.state?.seg ?? []).filter { ($0.stop ?? 0) > ($0.start ?? 0) }
+        guard live.count == t.zones.count else { return false }
+        return zip(t.zones, live).allSatisfy { $0.start == $1.start && $0.stop == $1.stop }
+    }
+
     private var segments: [LampSegment] { model.state?.seg ?? [] }
     private var current: LampSegment? {
         segments.first { ($0.id ?? 0) == selectedID } ?? segments.first
@@ -64,8 +74,9 @@ struct ConsoleSegments: View {
                     ForEach(templates) { t in Text(t.name).tag(t.id) }
                 }
                 .labelsHidden().frame(maxWidth: 220)
-                Button("应用") { confirmApply = true }
-                    .disabled(template == nil || model.busy)
+                Button(applied ? "已应用" : "应用到灯") { confirmApply = true }
+                    .disabled(template == nil || model.busy || applied)
+                    .buttonStyle(.borderedProminent)
                 Spacer()
                 Button("载入…") { showImporter = true }
                 Button("存当前") { saveName = ""; showSave = true }
@@ -81,6 +92,13 @@ struct ConsoleSegments: View {
 
     private func templateSummary(_ t: SegmentTemplate) -> some View {
         VStack(alignment: .leading, spacing: 3) {
+            if !applied {
+                let live = (model.state?.seg ?? []).filter { ($0.stop ?? 0) > ($0.start ?? 0) }.count
+                Label("灯上现在是 \(live) 个分段，与此模板不同 —— 点「应用到灯」才会写入。",
+                      systemImage: "arrow.up.circle")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 6) {
                 ForEach(Array(t.zones.enumerated()), id: \.offset) { _, z in
                     Text("\(z.name) \(z.count)")

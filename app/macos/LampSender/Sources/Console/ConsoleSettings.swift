@@ -90,13 +90,21 @@ struct ConfigGroupPane: View {
     /// 改动不立即下发 —— 配置项之间有耦合（比如改了灯珠数再改引脚），一次
     /// 一个 POST 会让灯在中间状态上重载。攒够了一起发。
     private var saveBar: some View {
-        HStack {
-            Text("\(model.configTree?.edits.count ?? 0) 项改动未保存")
-                .font(.caption).foregroundStyle(.orange)
-            Spacer()
-            Button("放弃") { model.revertConfig() }
-            Button("保存") { model.saveConfig() }
-                .keyboardShortcut("s").disabled(model.busy)
+        VStack(alignment: .leading, spacing: 4) {
+            // 实测踩到：保存配置后灯上的效果自己变了。原因是 WLED 收到
+            // /json/cfg 会重新载入开机预设（def.ps），那个预设若是播放列表
+            // 就会开始轮换效果。不是这里改错了，但用户有权先知道。
+            Label("保存后灯会重新载入开机预设，当前效果可能被覆盖。",
+                  systemImage: "exclamationmark.triangle")
+                .font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Text("\(model.configTree?.edits.count ?? 0) 项改动未保存")
+                    .font(.caption).foregroundStyle(.orange)
+                Spacer()
+                Button("放弃") { model.revertConfig() }
+                Button("保存") { model.saveConfig() }
+                    .keyboardShortcut("s").disabled(model.busy)
+            }
         }
         .padding(10)
         .background(.thinMaterial)

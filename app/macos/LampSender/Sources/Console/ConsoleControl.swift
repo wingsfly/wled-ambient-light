@@ -74,40 +74,10 @@ struct ConsoleControl: View {
     /// 仪表在界面显示时才拉（10 Hz），切走就停 —— 别让一个后台窗口一直问灯要数据。
     private func meters(_ t: LampTelemetry) -> some View {
         group("实时") {
-            spectrum(t.bands)
-            HStack(spacing: 16) {
-                meter("RMS", String(format: "%.3f", t.rms))
-                meter("BPM", t.bpm > 1 ? String(format: "%.0f", t.bpm) : "—")
-                // hasSemanticEmotion 连源一起判：有线/本地源拿不到情绪，
-                // 那时 emo 是 255、val 是 0，直接显示数字会让人以为是真值
-                meter("情绪", t.hasSemanticEmotion ? "#\(t.emo)" : "—")
-                meter("愉悦", t.hasSemanticEmotion ? String(format: "%+.2f", t.val) : "—")
-            }
+            AnalyzerPanel(telemetry: t, compact: true)
         }
         .onAppear { model.startTelemetry() }
         .onDisappear { model.stopTelemetry() }
-    }
-
-    private func spectrum(_ bands: [Double]) -> some View {
-        GeometryReader { geo in
-            let w = max(1, (geo.size.width - CGFloat(bands.count - 1) * 2) / CGFloat(max(bands.count, 1)))
-            HStack(alignment: .bottom, spacing: 2) {
-                ForEach(Array(bands.enumerated()), id: \.offset) { _, v in
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.accentColor.opacity(0.85))
-                        .frame(width: w, height: max(1, min(1, v * 3) * geo.size.height))
-                }
-            }
-            .frame(maxHeight: .infinity, alignment: .bottom)
-        }
-        .frame(height: 48)
-    }
-
-    private func meter(_ k: String, _ v: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(k).font(.caption2).foregroundStyle(.secondary)
-            Text(v).font(.callout.monospacedDigit())
-        }
     }
 
     private func sourceLabel(_ s: EffectiveSource) -> String {
@@ -125,10 +95,8 @@ struct ConsoleControl: View {
             filterBar.padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 8)
             Divider()
             ScrollView { effectList.padding(14) }
-            if let doc = currentDoc {
-                Divider()
-                docCard(doc)
-            }
+            Divider()
+            docArea
         }
     }
 
@@ -193,6 +161,29 @@ struct ConsoleControl: View {
     private var currentDoc: EffectDoc? {
         guard let fx = model.state?.primary?.fx, fx < model.effects.count else { return nil }
         return EffectDocs.doc(for: model.effects[fx])
+    }
+
+    /// 说明区常驻。之前是「有文档才显示」，选到 WLED 原生效果时整块消失，
+    /// 看起来像说明不见了 —— 其实是那个效果本来就没有说明。
+    @ViewBuilder
+    private var docArea: some View {
+        if let d = currentDoc {
+            docCard(d)
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(currentEffectName ?? "未选中效果").font(.callout.bold())
+                Text("WLED 原生效果，没有额外说明。带 ⓘ 的是本项目的 ♪ 效果，选中后这里会显示它的详细说明。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var currentEffectName: String? {
+        guard let fx = model.state?.primary?.fx, fx < model.effects.count else { return nil }
+        return model.effects[fx]
     }
 
     private func docCard(_ d: EffectDoc) -> some View {
