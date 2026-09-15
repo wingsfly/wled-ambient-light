@@ -1,7 +1,8 @@
-// 给模拟服务器用的 C 接口。
+// C ABI 的实现。**声明与布局在 lamp_capi.h**，那份是纯 C，
+// Python 的 ctypes 与 Swift（macOS sender）都按它对齐。
 //
-// 编译成动态库后由 Python 的 ctypes 直接调用 —— 没有子进程、没有管道、
-// 没有 IPC 开销。跑的是 usermods/lamp 下那批头文件本身，与固件同一份源码。
+// 编译成动态库后由调用方直接调 —— 没有子进程、没有管道、没有 IPC 开销。
+// 跑的是 usermods/lamp 下那批头文件本身，与固件同一份源码。
 //
 //   c++ -std=c++17 -O2 -shared -fPIC -I ../usermods/lamp -I . \
 //       lamp_capi.cpp -o liblamp.dylib      (Linux 用 .so)
@@ -14,31 +15,21 @@
 #include <vector>
 #include <new>
 
+#include "lamp_capi.h"
 #include "lamp_fx.h"
 #include "lamp_auto.h"
 #include "lamp_fft.h"
 
 using namespace lamp;
 
-extern "C" {
+// lamp_capi.h 里的三个维度是字面量 —— 头文件要保持纯 C，不能 include
+// 进来 constexpr。这三条把它们钉回 usermods/lamp 的真值：谁改了那边
+// 而没改头文件，**这里编译就断**，不会留到运行期变成读错位的数。
+static_assert(LAMP_NUM_BANDS  == NUM_BANDS,  "LAMP_NUM_BANDS 与 lamp_bands.h 的 NUM_BANDS 不一致");
+static_assert(LAMP_NUM_CHROMA == kChroma,    "LAMP_NUM_CHROMA 与 lamp_chroma.h 的 kChroma 不一致");
+static_assert(LAMP_NUM_LEDS   == TOTAL_LEDS, "LAMP_NUM_LEDS 与 lamp_geometry.h 的 TOTAL_LEDS 不一致");
 
-// 与 server.py 里的 struct 定义逐字段对应。改这里必须同步改那边 ——
-// ctypes 不会替你检查布局。
-struct LampFrameC {
-    float bands[NUM_BANDS];
-    float chroma[kChroma];
-    float bpm, conf, phase, rms, peak, gain, rate, centroid, flatness;
-    float key_conf, harmony;
-    float f0, f0_conf, mood, trend, novelty, dynamics, percussive, bar_conf;
-    float vocal;                 // 人声/主旋律存在度，见 lamp_vocal.h
-    float bands_h[NUM_BANDS], bands_p[NUM_BANDS];
-    int32_t lock, gate, onset, preset, key_root, key_major, f0_voiced, section;
-    int32_t bpb, bar_pos, bar_index, downbeat, auto_fx;
-    int32_t vocal_onset;
-    float auto_score[5];      // 自动选灯效的五个候选分数，排查用
-    float auto_duty, auto_jit, auto_perc, auto_split;
-    uint8_t px[TOTAL_LEDS * 3];      // C++ 效果层渲染的 96 个 RGB
-};
+extern "C" {
 
 struct LampHandle {
     Pipeline       p;
@@ -103,8 +94,8 @@ void lamp_lock_preset(void *hv, int32_t preset) {
                            ? (StylePreset)preset : STYLE_COUNT;
 }
 
-// 布局自检用。ctypes 那边算出的 sizeof 必须与这里一致，否则读出来是错位的数
-// 而不是报错 —— 这种错很难查，宁可启动时就崩。
+// 布局自检用。调用方（ctypes / Swift）算出的 sizeof 必须与这里一致，
+// 否则读出来是错位的数而不是报错 —— 这种错很难查，宁可启动时就崩。
 int32_t lamp_frame_size(void) { return (int32_t)sizeof(LampFrameC); }
 
 float lamp_sample_rate(void) { return kSampleRate; }
@@ -178,7 +169,7 @@ int32_t lamp_feed(void *hv, const float *pcm, int32_t count,
         fxRender(h->fx, h->fxst, h->fxcfg, f, h->geo, h->white_balance,
                  (float)presetHopMs(h->p.style.current), h->px.data());
 
-        // out 指向调用方（Python ctypes）的缓冲。produced 已由循环条件约束，
+        // out 指向调用方的缓冲。produced 已由循环条件约束，
         // 这里再挡一道 —— 越界写别人的堆是最难查的一类崩溃，代价只是一次比较。
         if (produced >= max_out) break;
         LampFrameC &o = out[produced++];
