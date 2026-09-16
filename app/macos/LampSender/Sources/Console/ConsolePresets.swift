@@ -18,6 +18,9 @@ struct ConsolePresets: View {
                 list
             }
         }
+        // 预设不跟着每次操作重拉（那是三个大响应里最没必要的一个），所以打开
+        // 这一页时补一次 —— 别的端存过新预设，这里才看得到。
+        .task { await model.loadPresets() }
     }
 
     private var header: some View {
