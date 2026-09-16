@@ -169,12 +169,28 @@ struct LabeledSlider: View {
     let range: ClosedRange<Double>
     let onChange: (Int) -> Void
 
+    /// 拖动中的本地值。**拖动期间不发请求**，松手才发一次。
+    ///
+    /// 原先是每个中间值都发：从 0 拖到 255 能打出上百个请求，而用户只想要落点那
+    /// 一个 —— 中间那些灯全都得认真处理一遍。松手后不马上清空，等灯把新状态推回
+    /// 来再交还显示权，免得中间闪一下旧值。
+    @State private var dragging: Double?
+
+    private var shown: Int { Int((dragging ?? Double(value)).rounded()) }
+
     var body: some View {
         HStack {
             Text(title).frame(width: 52, alignment: .leading)
-            Slider(value: Binding(get: { Double(value) }, set: { onChange(Int($0)) }), in: range)
-            Text("\(value)").font(.caption.monospacedDigit())
+            Slider(
+                value: Binding(get: { dragging ?? Double(value) }, set: { dragging = $0 }),
+                in: range,
+                onEditingChanged: { editing in
+                    if !editing, let v = dragging { onChange(Int(v.rounded())) }
+                }
+            )
+            Text("\(shown)").font(.caption.monospacedDigit())
                 .frame(width: 34, alignment: .trailing)
         }
+        .onChange(of: value) { dragging = nil }
     }
 }
