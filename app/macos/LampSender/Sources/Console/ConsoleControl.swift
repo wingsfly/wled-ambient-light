@@ -57,6 +57,7 @@ struct ConsoleControl: View {
                     }
                 }
             }
+            effectParams
             group("夜灯") {
                 Toggle("定时关灯", isOn: Binding(
                     get: { model.state?.nl?.on ?? false },
@@ -72,6 +73,34 @@ struct ConsoleControl: View {
                 }
             }
             meters
+        }
+    }
+
+    /// 效果的速度与强度/灵敏度。
+    ///
+    /// 放在这里而不是「分区 → 选分段」里 —— 那 24 段效果说明每一条都在教怎么
+    /// 调这两个值，两跳才够得着不合理。
+    @ViewBuilder
+    private var effectParams: some View {
+        if let seg = model.state?.primary {
+            group("效果参数") {
+                if let name = model.currentEffectName {
+                    Text(name).font(.caption).foregroundStyle(.secondary)
+                }
+                LabeledSlider(title: "速度", value: seg.sx ?? 128, range: 0...255) {
+                    model.setSpeed($0)
+                }
+                LabeledSlider(title: EffectCatalog.intensityLabel(forEffect: model.currentEffectName),
+                              value: seg.ix ?? 128, range: 0...255) {
+                    model.setIntensity($0)
+                }
+                if !EffectCatalog.isMusic(model.currentEffectName ?? "") {
+                    // 原生效果里 intensity 各有各的含义，说明白免得当成灵敏度调
+                    Text("WLED 原生效果的「强度」含义各不相同（密度、数量、宽度等）。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
