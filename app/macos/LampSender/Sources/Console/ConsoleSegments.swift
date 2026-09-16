@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 struct ConsoleSegments: View {
     @EnvironmentObject private var model: LampViewModel
     @State private var selectedID: Int?
-    @State private var templates: [SegmentTemplate] = SegmentTemplate.builtIns
+    /// 内置的 + 灯板上那份。用户存的模板跟着灯走，不放在这个 View 的本地状态里。
+    private var templates: [SegmentTemplate] { SegmentTemplate.builtIns + model.templates }
     @State private var chosen: SegmentTemplate.ID = SegmentTemplate.ambientTubesDetailed.id
     @State private var confirmApply = false
     @State private var showImporter = false
@@ -16,7 +17,6 @@ struct ConsoleSegments: View {
     @State private var showSave = false
     @State private var note: String?
 
-    private let store = TemplateStore(appName: "LampSender")
     private var template: SegmentTemplate? { templates.first { $0.id == chosen } }
 
     /// 灯上现在的分段是否就是选中的这个模板。
@@ -44,7 +44,7 @@ struct ConsoleSegments: View {
                 Divider()
                 editor
             }
-            .task { templates = SegmentTemplate.builtIns + store.load() }
+            .task { await model.syncTemplates() }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json],
                           allowsMultipleSelection: false, onCompletion: importTemplate)
             .alert("应用模板", isPresented: $confirmApply, presenting: template) { t in
@@ -131,10 +131,10 @@ struct ConsoleSegments: View {
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
             let t = try TemplateStore.read(contentsOf: url)
-            try store.save(t)                       // 存一份，下次不用再找文件
-            templates = SegmentTemplate.builtIns + store.load()
             chosen = t.id
-            note = "已载入「\(t.name)」"
+            note = "已载入「\(t.name)」，正在同步到灯"
+            // 存到灯上，其他端也就有了
+            Task { await model.saveTemplate(t); note = "已载入「\(t.name)」" }
         } catch {
             note = "这个文件不是模板：\(error.localizedDescription)"
         }
@@ -144,13 +144,11 @@ struct ConsoleSegments: View {
         guard let t = model.templateFromCurrent(named: saveName.isEmpty ? "我的布局" : saveName) else {
             note = "当前没有可导出的分段"; return
         }
-        do {
-            let url = try store.save(t)
-            templates = SegmentTemplate.builtIns + store.load()
-            chosen = t.id
-            note = "已存到 \(url.path)"
-        } catch {
-            note = "存不下来：\(error.localizedDescription)"
+        chosen = t.id
+        note = "正在存到灯上…"
+        Task {
+            await model.saveTemplate(t)
+            note = model.error == nil ? "已存到灯上，其他端也能看到了" : "存不下来：\(model.error ?? "")"
         }
     }
 

@@ -7,7 +7,7 @@ import LampKit
 /// 分页，Mac 是侧边栏加窗口，硬凑一套反而两头别扭。共享的是逻辑和接口规范，
 /// 不是控件。
 struct ConsoleView: View {
-    @StateObject private var model = LampViewModel()
+    @StateObject private var model = LampViewModel(appName: "LampSender")
     @State private var page: Page = .control
     @State private var manualHost = ""
     @AppStorage("consoleSidebar") private var showSidebar = true
