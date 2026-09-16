@@ -144,19 +144,38 @@ struct ConsoleControl: View {
     }
 
     private var effectList: some View {
-        let hits = filtered(model.effects)
-        return VStack(alignment: .leading, spacing: 1) {
-            Text("效果（\(hits.count)/\(model.effects.count)）")
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(.bottom, 4)
-            ForEach(hits, id: \.0) { idx, name in
-                let isCurrent = model.state?.primary?.fx == idx
-                Button { model.setEffect(idx) } label: {
+        let groups = EffectCatalog.grouped(model.effects, category: category, filter: effectFilter)
+        return VStack(alignment: .leading, spacing: 10) {
+            // ♪ 效果置顶。固件的效果 ID 是注册顺序、不能重排，所以动的是显示
+            // 顺序 —— ♪ Auto 原本排在 240 个的最末尾，而它最常用。
+            if !groups.music.isEmpty {
+                section("♪ 音乐效果", groups.music, "\(groups.music.count) 个，带详细说明")
+            }
+            if !groups.native.isEmpty {
+                section("WLED 原生", groups.native, "\(groups.native.count) 个")
+            }
+            if groups.isEmpty {
+                Text("没有匹配的效果").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func section(_ title: String, _ entries: [EffectCatalog.Entry],
+                         _ subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(title).font(.caption.bold())
+                Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 3)
+            ForEach(entries) { e in
+                let isCurrent = model.state?.primary?.fx == e.index
+                Button { model.setEffect(e.index) } label: {
                     HStack(spacing: 6) {
-                        Text(name).lineLimit(1)
+                        Text(e.name).lineLimit(1)
                         Spacer(minLength: 4)
                         // 有说明的效果标出来，免得用户以为点了没反应
-                        if EffectDocs.doc(for: name) != nil {
+                        if EffectDocs.doc(for: e.name) != nil {
                             Image(systemName: "info.circle").font(.caption2).foregroundStyle(.secondary)
                         }
                         if isCurrent { Image(systemName: "checkmark").font(.caption) }
@@ -230,14 +249,6 @@ struct ConsoleControl: View {
 
     private static let docLabels = ["是什么", "怎么动", "参数", "配色", "场合"]
 
-    private func filtered(_ names: [String]) -> [(Int, String)] {
-        var all = Array(names.enumerated()).map { ($0.offset, $0.element) }
-        if let c = category {
-            all = all.filter { EffectDocs.categories(of: $0.1).contains(c) }
-        }
-        guard !effectFilter.isEmpty else { return all }
-        return all.filter { $0.1.localizedCaseInsensitiveContains(effectFilter) }
-    }
 
     @ViewBuilder
     private func group<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
