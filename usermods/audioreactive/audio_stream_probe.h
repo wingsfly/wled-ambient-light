@@ -27,6 +27,30 @@ inline bool chunkHasChangingSamples(const uint8_t *data, size_t bytes) {
   return (hi - lo) >= 2;
 }
 
+// Same check for a block already decoded by an AudioSource (getSamples output:
+// float on the int16 scale).  The V5 hot-switch probe reads through the audio
+// source instead of the legacy driver, so it sees these instead of DMA words.
+inline bool samplesChanging(const float *samples, size_t n) {
+  if (!samples || n < 8) return false;
+  float lo = samples[0];
+  float hi = samples[0];
+  for (size_t i = 1; i < n; ++i) {
+    if (samples[i] < lo) lo = samples[i];
+    if (samples[i] > hi) hi = samples[i];
+  }
+  return (hi - lo) >= 2.0f;
+}
+
+// The ADC source zero-fills its buffer when it cannot deliver a full block,
+// while a live analog front end always shows its bias residue.
+inline bool samplesNonZero(const float *samples, size_t n) {
+  if (!samples) return false;
+  for (size_t i = 0; i < n; ++i) {
+    if (samples[i] != 0.0f) return true;
+  }
+  return false;
+}
+
 inline uint32_t chunkHash(const uint8_t *data, size_t bytes) {
   uint32_t hash = 2166136261u; // FNV-1a
   for (size_t i = 0; i < bytes; ++i) {
@@ -40,8 +64,24 @@ class Window {
  public:
   void observe(const uint8_t *data, size_t bytes, bool late) {
     if (!data || bytes == 0) return;
+    note(chunkHasChangingSamples(data, bytes), late, data, bytes);
+  }
+
+  void observeSamples(const float *samples, size_t n, bool late) {
+    if (!samples || n == 0) return;
+    note(samplesChanging(samples, n), late,
+         reinterpret_cast<const uint8_t *>(samples), n * sizeof(float));
+  }
+
+  bool healthy() const {
+    return dataChunks_ >= 4 && signalChunks_ >= 3 && lateSignalChunks_ >= 2
+           && lateContentChanged_;
+  }
+
+ private:
+  void note(bool signal, bool late, const uint8_t *data, size_t bytes) {
     ++dataChunks_;
-    if (!chunkHasChangingSamples(data, bytes)) return;
+    if (!signal) return;
 
     ++signalChunks_;
     if (!late) return;
@@ -56,12 +96,6 @@ class Window {
     }
   }
 
-  bool healthy() const {
-    return dataChunks_ >= 4 && signalChunks_ >= 3 && lateSignalChunks_ >= 2
-           && lateContentChanged_;
-  }
-
- private:
   uint16_t dataChunks_ = 0;
   uint16_t signalChunks_ = 0;
   uint16_t lateSignalChunks_ = 0;

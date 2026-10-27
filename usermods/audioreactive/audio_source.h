@@ -518,7 +518,9 @@ class I2SSource : public AudioSource {
         const size_t bytes_wanted = (size_t)num_samples * _bytesPerSample;
         uint8_t rawBuf[bytes_wanted]; // intermediate sample storage on stack
 
-        err = i2s_channel_read(_rx_handle, rawBuf, bytes_wanted, &bytes_read, portMAX_DELAY);
+        // lamp fork：有限超时，同 legacy 分支 —— 数据流若死，portMAX_DELAY 会把 FFT task
+        // 永久冻在这里，热切换的停靠握手随之失效。正常一块 ~23ms，100ms 只在真异常时触发。
+        err = i2s_channel_read(_rx_handle, rawBuf, bytes_wanted, &bytes_read, pdMS_TO_TICKS(100));
         if (err != ESP_OK) {
           DEBUGSR_PRINTF("Failed to get samples: %d\n", err);
           return;

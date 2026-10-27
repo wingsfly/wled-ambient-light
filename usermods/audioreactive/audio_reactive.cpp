@@ -170,7 +170,7 @@ static FFTsampleType* windowFFT = nullptr;
 #include "audio_source.h"
 #include "../lamp/lamp_pcm_tap.h"   // lamp fork：PCM 分接给本地完整管线
 #include "audio_stream_probe.h"
-constexpr i2s_port_t I2S_PORT = I2S_NUM_0;       // I2S port to use (do not change !)
+#include <type_traits>
 constexpr int BLOCK_SIZE = 128;                  // I2S buffer size (samples)
 
 // globals
@@ -1406,29 +1406,28 @@ class AudioReactive : public Usermod {
       return true;
     }
 
-    // 重建后主动验流：趁 FFT task 仍挂起（无并发读者）直读驱动，确认数据真在来。
-    // 实测存在「install 全程无错但 DMA 不供数」的死流（ADC→I2S 方向，periph
-    // reset 也救不回，根因疑在 IDF4.4 legacy i2s 与 adc_digi 的 GDMA 交互）。
-    // ADC 只需确认窗口后半仍有数据；I2S 还必须确认样本不是全零/常量，且
-    // 后半段多个块内容持续变化。否则全零死流或一块陈旧 DMA 数据会被误判为活。
+    // 重建后主动验流：趁 FFT task 仍挂起（无并发读者），经音源自己的 getSamples()
+    // 读，确认数据真在来 —— 与驱动无关，ADC 与 I2S 走同一条路径。
+    // 在 IDF 4.4 legacy 驱动下实测过「install 全程无错但 DMA 不供数」的死流（ADC→I2S
+    // 方向）；V5 驱动下是否仍会出现待自制板实测，验流与重启兜底照旧保留。
+    // 每次读前清零：读失败时 getSamples() 不写缓冲，残留的上一块会被误当成新数据。
+    // ADC：后半窗口出现非零样本即活（前端 1.62V 偏置有残差，读不满时源会清零）；
+    // I2S：还须有自噪声跨度且后半段多块内容持续变化，排除全零 / 常量 / 陈旧块。
     bool probeAudioStream(uint8_t type, unsigned long windowMs) {
-      uint8_t buf[256];
+      static_assert(std::is_same<FFTsampleType, float>::value, "hot-switch probe expects float samples (S3 has an FPU)");
+      constexpr uint16_t n = 128;
+      FFTsampleType buf[n];
       const unsigned long t0 = millis();
       bool adcFreshLate = false;
       audio_stream_probe::Window i2sProbe;
       while ((long)(millis() - t0) < (long)windowMs) {
         const bool late = (millis() - t0) >= (windowMs / 2);
-    #if defined(CONFIG_IDF_TARGET_ESP32S3)
+        memset(buf, 0, sizeof(buf));
+        audioSource->getSamples(buf, n);
         if (type == 0) {
-          uint32_t rd = 0;
-          adc_digi_read_bytes(buf, sizeof(buf), &rd, 25);
-          if (rd > 0 && late) adcFreshLate = true;
-        } else
-    #endif
-        {
-          size_t rd = 0;
-          i2s_read(I2S_NUM_0, buf, sizeof(buf), &rd, pdMS_TO_TICKS(50));
-          i2sProbe.observe(buf, rd, late);
+          if (late && audio_stream_probe::samplesNonZero(buf, n)) adcFreshLate = true;
+        } else {
+          i2sProbe.observeSamples(buf, n, late);
         }
         delay(5);
       }
@@ -1436,8 +1435,8 @@ class AudioReactive : public Usermod {
     }
 
     // 运行时热切换音源，无需重启。置 disableSoundProcessing 后先做停靠握手
-    // （ADCS3Source 的读循环最坏 ~76ms，onUpdateBegin 里那个 delay(25) 不够——
-    // suspend 冻在 adc_digi 里再 deinit 就是 use-after-free，实板表现为拔出后
+    // （一次读最坏可达 I2S 读超时 100ms，onUpdateBegin 里那个 delay(25) 不够——
+    // suspend 冻在驱动读里再 deinit 就是 use-after-free，实板表现为拔出后
     // panic 重启），确认 task 停靠再走 onUpdateBegin 的挂起/恢复路径。
     // 只改运行态 dmType，不写 flash（插拔不磨损配置区）。
     void switchAudioSourceForJack(uint8_t newType) {
@@ -1445,7 +1444,7 @@ class AudioReactive : public Usermod {
 
       DEBUGSR_PRINTF("AR: jack detect - switching audio source %d -> %d\n", dmType, newType);
       disableSoundProcessing = true;    // 亮牌：FFT task 本轮循环顶之后不再进 getSamples
-      if (!waitFFTTaskParked(300)) {    // ADCS3 最坏 ~76ms + FFT ~5ms，300ms 裕量充足
+      if (!waitFFTTaskParked(300)) {    // I2S 读超时 100ms + FFT ~5ms，300ms 裕量充足
         DEBUGSR_PRINTLN(F("AR: jack switch aborted - FFT task busy"));
         jackSwitchRetryAfter = millis() + 5000;  // 冷却 5s：task 真卡死时别每轮拖 300ms
         return;                         // 放弃本次；冷却后收敛逻辑自动重试
@@ -1456,14 +1455,9 @@ class AudioReactive : public Usermod {
         delete audioSource;
         audioSource = nullptr;
       }
-      // 对齐 setup() 的外设硬复位。实测缺这步时 ADC→I2S 重建后 RX 不供数据、
-      // i2s_read 永久阻塞（adc_digi 生命周期的残留影响 I2S DMA）——驱动 install
-      // 成功但流是死的。setup() 每次 boot 都做这三步，运行时重建同样要做。
-      i2s_driver_uninstall(I2S_NUM_0);  // 防残留；未安装时报错属预期，忽略
-      #if !defined(CONFIG_IDF_TARGET_ESP32C3)
-      periph_module_reset(PERIPH_I2S0_MODULE);
-      #endif
-      delay(100);
+      // 不做外设硬复位：IDF 4.4 legacy 驱动下需要（缺了 ADC→I2S 重建后 RX 不供数），
+      // V5 的 i2s_new_channel 占用空闲端口时自己就 i2s_ll_reset_register()，上游 setup()
+      // 也已把这段限定为 ESP_IDF_VERSION_MAJOR < 5。热切换只在 V5 下启用。
       dmType = newType;
 
     #if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(AR_ANALOG_MIC_ADC_CONTINUOUS)
