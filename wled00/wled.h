@@ -586,6 +586,10 @@ WLED_GLOBAL bool forceReconnect _INIT(false);
 WLED_GLOBAL unsigned long lastReconnectAttempt _INIT(0);
 WLED_GLOBAL bool interfacesInited _INIT(false);
 WLED_GLOBAL bool wasConnected _INIT(false);
+#ifdef WLED_KEEP_WIFI_STACK
+// lamp fork：另一个协议栈（如 Matter 配网）正在驱动 STA 连接；WLED 暂停连接 / 重连 / 开 AP，只跟踪连接状态
+WLED_GLOBAL bool wifiDrivenElsewhere _INIT(false);
+#endif
 
 // color
 // lastRandomIndex is private to colors.cpp - see there.

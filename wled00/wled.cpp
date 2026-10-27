@@ -993,6 +993,22 @@ void WLED::handleConnection()
   if ((wifiConfigured && multiWiFi.size() > 1 && WiFi.scanComplete() < 0) || (now < 2000 && (!wifiConfigured || apBehavior == AP_BEHAVIOR_ALWAYS)))
     return;
 
+#ifdef WLED_KEEP_WIFI_STACK
+  // lamp fork：另一个协议栈在驱动 STA（如 Matter 配网时换网）。不发起连接、重连或开 AP，交还后
+  // 重连计时从头开始；连上了照常走下面的 newly connected 分支初始化网络服务。
+  if (wifiDrivenElsewhere) {
+    lastReconnectAttempt = now;
+    if (apActive && !(WiFi.getMode() & WIFI_MODE_AP)) { // 对方切模式时可能已关掉 AP
+      dnsServer.stop();
+      apActive = false;
+    }
+    if (!WLEDNetwork.isConnected()) {
+      interfacesInited = false;
+      return;
+    }
+    if (interfacesInited) return;
+  } else
+#endif
   if (lastReconnectAttempt == 0 || forceReconnect) {
     DEBUG_PRINTF_P(PSTR("Initial connect or forced reconnect (@ %lus).\n"), nowS);
     selectedWiFi = findWiFi(); // find strongest WiFi
