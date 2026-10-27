@@ -154,6 +154,9 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
 #ifndef RELAY_DELAY
 #define RELAY_DELAY 50 // default delay in ms between switching on relay and sending data to LEDs
 #endif
+#ifndef RELAY_OFF_DELAY
+#define RELAY_OFF_DELAY 600 // lamp fork: minimum time in ms between turning LEDs off and switching off the relay (also waits for the strip to finish updating)
+#endif
 
 #if defined(ESP8266) || defined(CONFIG_IDF_TARGET_ESP32S2)
 #define WLED_MAX_COLOR_ORDER_MAPPINGS 5

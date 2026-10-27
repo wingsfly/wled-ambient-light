@@ -387,7 +387,7 @@ void handleOnOff(bool forceOff)
       }
       offMode = false;
     }
-  } else if ((millis() - lastOnTime > 600 && !strip.needsUpdate()) || forceOff) {
+  } else if ((millis() - lastOnTime > RELAY_OFF_DELAY && !strip.needsUpdate()) || forceOff) {
     // for turning LED or relay off we need to wait until strip no longer needs updates (strip.trigger())
     if (!offMode) {
       BusManager::off();
