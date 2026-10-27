@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_bands.h"
 #include "lamp_envelope.h"   // envCoeff
@@ -32,7 +33,7 @@ inline float spectralFlux(const float *prev, const float *cur, float dt_ms) {
     float s = 0.0f;
     for (int i = 0; i < NUM_BANDS; ++i) {
         const float d = cur[i] - prev[i];
-        if (isfinite(d) && d > 0.0f) s += d;   // 单段的 NaN 只丢那一段
+        if (std::isfinite(d) && d > 0.0f) s += d;   // 单段的 NaN 只丢那一段
     }
     return s * 1000.0f / dt_ms;                // 每秒变化量
 }

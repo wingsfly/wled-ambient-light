@@ -24,6 +24,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 namespace lamp {
 
@@ -89,8 +90,8 @@ inline float barContrast(const float *acc, int m, int &peak_ix) {
 inline void barUpdate(BarState &s, const BarConfig &c,
                       float phase, bool locked, float accent) {
     s.beat = s.downbeat = false;
-    if (!locked || !isfinite(phase)) { s.has_phase = false; return; }
-    if (!isfinite(accent) || accent < 0.0f) accent = 0.0f;
+    if (!locked || !std::isfinite(phase)) { s.has_phase = false; return; }
+    if (!std::isfinite(accent) || accent < 0.0f) accent = 0.0f;
 
     if (!s.has_phase) { s.prev_phase = phase; s.has_phase = true; return; }
     const float prev = s.prev_phase;

@@ -72,6 +72,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_bands.h"
 #include "lamp_envelope.h"   // envCoeff
@@ -146,7 +147,7 @@ inline float formantShare(const VocalConfig &c, const float *bands_h) {
     double inside = 0.0, total = 0.0;
     for (int i = 0; i < NUM_BANDS; ++i) {
         const float e = bands_h[i];
-        if (!isfinite(e) || e <= 0.0f) continue;
+        if (!std::isfinite(e) || e <= 0.0f) continue;
         total += e;
         const float lo = kBandEdgeHz[i], hi = kBandEdgeHz[i + 1];
         const float a = lo > c.formant_lo_hz ? lo : c.formant_lo_hz;
@@ -161,7 +162,7 @@ inline float formantShare(const VocalConfig &c, const float *bands_h) {
 // 这一点在 auto 那边踩过坑（用成缩放会让兜底永远选不上）。
 inline float vocalGate(float x, float th) {
     if (!(th < 1.0f)) return 0.0f;
-    if (!isfinite(x)) return 0.0f;
+    if (!std::isfinite(x)) return 0.0f;
     const float v = (x - th) / (1.0f - th);
     return v <= 0.0f ? 0.0f : (v >= 1.0f ? 1.0f : v);
 }
@@ -170,13 +171,13 @@ inline void vocalUpdate(VocalState &s, const VocalConfig &c,
                         float f0_hz, float f0_conf, bool f0_voiced,
                         const float *bands_h, float percussive, float dt_ms) {
     float voiced = 0.0f;
-    if (f0_voiced && isfinite(f0_hz) &&
+    if (f0_voiced && std::isfinite(f0_hz) &&
         f0_hz >= c.f0_lo_hz && f0_hz <= c.f0_hi_hz)
-        voiced = vocalGate(isfinite(f0_conf) ? f0_conf : 0.0f, c.f0_conf_min);
+        voiced = vocalGate(std::isfinite(f0_conf) ? f0_conf : 0.0f, c.f0_conf_min);
 
     const float share   = formantShare(c, bands_h);
     const float formant = vocalGate(share, c.formant_share_min);
-    const float perc    = (isfinite(percussive) && percussive > 0.0f)
+    const float perc    = (std::isfinite(percussive) && percussive > 0.0f)
                         ? (percussive < 1.0f ? percussive : 1.0f) : 0.0f;
     const float harm    = vocalGate(1.0f - perc, c.harmonic_min);
 
@@ -195,7 +196,7 @@ inline void vocalUpdate(VocalState &s, const VocalConfig &c,
     // 起音快、释放慢：换气的空档不该让灯灭掉。
     const float tau = (s.raw > s.vocal) ? c.attack_ms : c.release_ms;
     s.vocal += envCoeff(tau, dt_ms) * (s.raw - s.vocal);
-    if (!isfinite(s.vocal) || s.vocal < 0.0f) s.vocal = 0.0f;
+    if (!std::isfinite(s.vocal) || s.vocal < 0.0f) s.vocal = 0.0f;
     if (s.vocal > 1.0f) s.vocal = 1.0f;
 
     const bool was = s.above;

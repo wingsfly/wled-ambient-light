@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 namespace lamp {
 
@@ -66,7 +67,7 @@ inline void envelopeInit(Envelope &e, const EnvelopeConfig &c, float dt_ms) {
 // rms 为本帧的 RMS 响度。非有限值整帧丢弃 —— ADC 掉线或上游除零都可能送 NaN，
 // 一旦渗进 IIR 状态就永远出不来了。
 inline void envelopeUpdate(Envelope &e, float rms) {
-    if (!isfinite(rms) || rms < 0.0f) return;
+    if (!std::isfinite(rms) || rms < 0.0f) return;
     e.fast += e.a_fast * (rms - e.fast);
     e.slow += e.a_slow * (rms - e.slow);
     // 峰值：瞬时攻击、指数回落
@@ -125,7 +126,7 @@ inline void agcInit(Agc &g, const AgcConfig &c, float dt_ms) {
 // attack 必须远快于 release：变响要立刻压下去防削顶，变轻要慢慢放上来，
 // 否则歌曲间隙那两秒增益就冲上去了，下一段主歌进来先炸一下。
 inline float agcUpdate(Agc &g, const AgcConfig &c, float slow_rms) {
-    if (!isfinite(slow_rms)) return g.gain;
+    if (!std::isfinite(slow_rms)) return g.gain;
 
     // 负的 slow_rms 不需要单独夹零：负数小于任何非负 squelch，下面的门限必先拦下。
     // 即便 squelch 被配成负数，want 的夹取也会把负增益顶回 gain_min。

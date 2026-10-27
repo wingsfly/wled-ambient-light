@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_bands.h"
 #include "lamp_envelope.h"   // envCoeff
@@ -129,7 +130,7 @@ inline void moodInit(MoodState &s, const MoodConfig &c, float dt_ms) {
 inline void bandProfile(const float *bands, float *out) {
     float sum = 0.0f;
     for (int i = 0; i < NUM_BANDS; ++i) {
-        const float v = (isfinite(bands[i]) && bands[i] > 0.0f) ? bands[i] : 0.0f;
+        const float v = (std::isfinite(bands[i]) && bands[i] > 0.0f) ? bands[i] : 0.0f;
         out[i] = v; sum += v;
     }
     if (sum > 1e-12f) for (int i = 0; i < NUM_BANDS; ++i) out[i] /= sum;
@@ -140,7 +141,7 @@ inline void bandProfile(const float *bands, float *out) {
 inline float profileDistance(const float *a, const float *b) {
     float dot = 0.0f, na = 0.0f, nb = 0.0f;
     for (int i = 0; i < NUM_BANDS; ++i) {
-        if (!isfinite(a[i]) || !isfinite(b[i])) return 0.0f;
+        if (!std::isfinite(a[i]) || !std::isfinite(b[i])) return 0.0f;
         dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i];
     }
     const float den = sqrtf(na * nb);
@@ -152,7 +153,7 @@ inline float profileDistance(const float *a, const float *b) {
 
 // 波峰因数。稀疏（鼓点之间有空隙）时高，塞满时接近 1。
 inline float crestFactor(float peak, float rms_fast) {
-    if (!isfinite(peak) || !isfinite(rms_fast)) return 1.0f;
+    if (!std::isfinite(peak) || !std::isfinite(rms_fast)) return 1.0f;
     if (!(rms_fast > 1e-9f)) return 1.0f;
     const float cf = peak / rms_fast;
     return (cf < 1.0f) ? 1.0f : cf;
@@ -166,7 +167,7 @@ inline void moodUpdate(MoodState &s, const MoodConfig &c,
 
     // 静音时冻结全部统计。放开的话三十秒基线会被一段空白慢慢拉到零，
     // 音乐一回来立刻误报「渐强」和「换段」—— 与 AGC 静音冻结增益同理。
-    if (gated || !isfinite(rms_fast) || rms_fast < 0.0f) return;
+    if (gated || !std::isfinite(rms_fast) || rms_fast < 0.0f) return;
 
     // ── 能量走向 ──
     if (!s.primed) { s.e_short = s.e_long = rms_fast; s.primed = true; }
@@ -223,12 +224,12 @@ inline void moodUpdate(MoodState &s, const MoodConfig &c,
     }
 
     // ── 氛围标量 ──
-    float d_onset = (isfinite(onset_rate) && onset_rate > 0.0f)
+    float d_onset = (std::isfinite(onset_rate) && onset_rate > 0.0f)
                         ? onset_rate / c.onset_full : 0.0f;
     if (d_onset > 1.0f) d_onset = 1.0f;
 
     float d_bright = 0.0f;
-    if (isfinite(centroid_hz) && centroid_hz > c.bright_lo_hz && c.bright_hi_hz > c.bright_lo_hz) {
+    if (std::isfinite(centroid_hz) && centroid_hz > c.bright_lo_hz && c.bright_hi_hz > c.bright_lo_hz) {
         // 对数映射。人耳对频率是对数感知的，线性映射会让 200→400Hz 这一段
         // （听感上整整一个八度）挤成一丁点。
         d_bright = log2f(centroid_hz / c.bright_lo_hz) / log2f(c.bright_hi_hz / c.bright_lo_hz);

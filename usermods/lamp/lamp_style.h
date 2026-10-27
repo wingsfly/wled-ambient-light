@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_window.h"
 #include "lamp_time.h"
@@ -91,7 +92,7 @@ inline float speedDemand(const StyleConfig &c, const StyleFeatures &f) {
     const float bpm   = conf * clamp01((f.bpm - 60.0f) / 120.0f) + (1.0f - conf) * 0.5f;
 
     // 质心按对数归一化：200Hz–6kHz 对应 0–1。听感上倍频程才是等距的。
-    const float cent  = (f.centroid_hz > 200.0f && isfinite(f.centroid_hz))
+    const float cent  = (f.centroid_hz > 200.0f && std::isfinite(f.centroid_hz))
                       ? clamp01(log2f(f.centroid_hz / 200.0f) / 4.9f) : 0.0f;
 
     const float flat  = clamp01(f.flatness);

@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_onset.h"
 #include "lamp_time.h"
@@ -181,12 +182,12 @@ inline bool beatAnalyze(BeatTracker &b, const BeatConfig &c) {
 // flux 来自 spectralFlux()，is_onset 来自 onsetUpdate()。
 inline void beatUpdate(BeatTracker &b, const BeatConfig &c,
                        float flux, bool is_onset, float dt_ms, uint32_t now_ms) {
-    if (!isfinite(flux) || flux < 0.0f) flux = 0.0f;
+    if (!std::isfinite(flux) || flux < 0.0f) flux = 0.0f;
 
     // 重采样到固定的 43.066 Hz。
     // 窗内取**最大值**而非平均：ODF 的价值全在峰的锐度上，平均会把它抹平。
     if (flux > b.pending) b.pending = flux;
-    if (isfinite(dt_ms) && dt_ms > 0.0f) b.carry_ms += dt_ms;
+    if (std::isfinite(dt_ms) && dt_ms > 0.0f) b.carry_ms += dt_ms;
 
     bool pushed = false;
     // dt 大于 ODF 周期时（氛围档 46.44ms）一帧要产出两个样本，两个都填 pending。

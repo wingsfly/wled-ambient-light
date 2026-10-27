@@ -31,6 +31,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_bands.h"
 
@@ -103,7 +104,7 @@ inline void hpssProcess(HpssState &s, const HpssConfig &c,
 
     // 写入历史
     for (int i = 0; i < NUM_BANDS; ++i) {
-        const float v = (isfinite(bands[i]) && bands[i] > 0.0f) ? bands[i] : 0.0f;
+        const float v = (std::isfinite(bands[i]) && bands[i] > 0.0f) ? bands[i] : 0.0f;
         s.hist[s.head][i] = v;
     }
     s.head = (s.head + 1) % s.n;
@@ -143,8 +144,8 @@ inline void hpssProcess(HpssState &s, const HpssConfig &c,
 inline float percussiveRatio(const float *h, const float *p) {
     float sh = 0.0f, sp = 0.0f;
     for (int i = 0; i < NUM_BANDS; ++i) {
-        if (isfinite(h[i]) && h[i] > 0.0f) sh += h[i];
-        if (isfinite(p[i]) && p[i] > 0.0f) sp += p[i];
+        if (std::isfinite(h[i]) && h[i] > 0.0f) sh += h[i];
+        if (std::isfinite(p[i]) && p[i] > 0.0f) sp += p[i];
     }
     const float tot = sh + sp;
     return (tot > 1e-12f) ? (sp / tot) : 0.0f;

@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_window.h"
 #include "lamp_bands.h"
@@ -53,7 +54,7 @@ inline void computeChroma(const float *mag, size_t n, float *out) {
 
     for (size_t k = (k0 < 1 ? 1 : k0); k <= k1; ++k) {
         const float m = mag[k];
-        if (!isfinite(m) || m <= 0.0f) continue;
+        if (!std::isfinite(m) || m <= 0.0f) continue;
         const int pc = pitchClassOf((float)k * df);
         if (pc >= 0) out[pc] += m * m;
     }
@@ -103,7 +104,7 @@ inline KeyEstimate estimateKey(const float *chroma) {
     KeyEstimate e;
     float sum = 0.0f;
     for (int i = 0; i < kChroma; ++i) {
-        if (!isfinite(chroma[i])) return e;
+        if (!std::isfinite(chroma[i])) return e;
         sum += chroma[i];
     }
     if (!(sum > 0.05f)) return e;              // 近乎静音，不猜
@@ -130,7 +131,7 @@ inline KeyEstimate estimateKey(const float *chroma) {
 inline float chromaDistance(const float *a, const float *b) {
     float dot = 0.0f, na = 0.0f, nb = 0.0f;
     for (int i = 0; i < kChroma; ++i) {
-        if (!isfinite(a[i]) || !isfinite(b[i])) return 0.0f;
+        if (!std::isfinite(a[i]) || !std::isfinite(b[i])) return 0.0f;
         dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i];
     }
     const float den = sqrtf(na * nb);

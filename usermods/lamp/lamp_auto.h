@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_fx.h"
 #include "lamp_time.h"
@@ -156,7 +157,7 @@ inline void splitEnergies(const float *bands, float &ends, float &mid) {
 }
 
 inline float splitContrastOf(float ends, float mid) {
-    if (!isfinite(ends) || !isfinite(mid)) return 0.0f;
+    if (!std::isfinite(ends) || !std::isfinite(mid)) return 0.0f;
     const float tot = ends + mid;
     if (!(tot > 1e-9f)) return 0.0f;
     float v = (ends - mid) / tot;
@@ -212,7 +213,7 @@ inline void autoScore(const AudioFrame &f, const AutoConfig &c,
     out[4] = (rubato > moving) ? rubato : moving;
 
     for (int i = 0; i < kAutoCands; ++i)
-        if (!isfinite(out[i]) || out[i] < 0.0f) out[i] = 0.0f;
+        if (!std::isfinite(out[i]) || out[i] < 0.0f) out[i] = 0.0f;
 }
 
 // 返回本次是否切换了效果。
@@ -225,11 +226,11 @@ inline bool autoUpdate(AutoState &s, const AutoConfig &c,
 
     // 音高抖动率。只在有声时更新 —— 无声期间 prev_semi 保持不变，
     // 否则一段空白之后的第一个音会被记成一次巨大的跳变。
-    if (f.f0_voiced && f.f0_hz > 0.0f && isfinite(f.f0_hz)) {
+    if (f.f0_voiced && f.f0_hz > 0.0f && std::isfinite(f.f0_hz)) {
         const float semi = hzToSemi(f.f0_hz, 80.0f);
         if (s.has_prev_semi && s.dt_ms > 0.0f) {
             const float rate = fabsf(semi - s.prev_semi) * 1000.0f / s.dt_ms;
-            if (isfinite(rate)) s.f0_jitter += s.a_feat * (rate - s.f0_jitter);
+            if (std::isfinite(rate)) s.f0_jitter += s.a_feat * (rate - s.f0_jitter);
         }
         s.prev_semi = semi; s.has_prev_semi = true;
     }
@@ -240,8 +241,8 @@ inline bool autoUpdate(AutoState &s, const AutoConfig &c,
     // 而按能量加权，那一记鼓的份量本来就该更重。
     float sh = 0.0f, sp = 0.0f;
     for (int i = 0; i < NUM_BANDS; ++i) {
-        if (isfinite(f.bands_h[i]) && f.bands_h[i] > 0.0f) sh += f.bands_h[i];
-        if (isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) sp += f.bands_p[i];
+        if (std::isfinite(f.bands_h[i]) && f.bands_h[i] > 0.0f) sh += f.bands_h[i];
+        if (std::isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) sp += f.bands_p[i];
     }
     s.e_h += s.a_feat * (sh - s.e_h);
     s.e_p += s.a_feat * (sp - s.e_p);
@@ -250,8 +251,8 @@ inline bool autoUpdate(AutoState &s, const AutoConfig &c,
 
     float ends = 0.0f, mid = 0.0f;
     splitEnergies(f.bands, ends, mid);
-    if (!isfinite(ends)) ends = 0.0f;
-    if (!isfinite(mid))  mid  = 0.0f;
+    if (!std::isfinite(ends)) ends = 0.0f;
+    if (!std::isfinite(mid))  mid  = 0.0f;
     s.e_ends += s.a_feat * (ends - s.e_ends);
     s.e_mid  += s.a_feat * (mid  - s.e_mid);
     const float split_avg = splitContrastOf(s.e_ends, s.e_mid);

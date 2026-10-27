@@ -41,6 +41,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_window.h"     // kSampleRate
 #include "lamp_envelope.h"   // envCoeff
@@ -143,7 +144,7 @@ inline float hpsScore(const float *mag, size_t bins, int k, int harmonics, float
         const size_t idx = (size_t)k * (size_t)h;
         if (idx >= bins) break;
         float m = mag[idx];
-        if (!isfinite(m) || m < flr) m = flr;
+        if (!std::isfinite(m) || m < flr) m = flr;
         acc += logf(m);
         ++used;
     }
@@ -173,7 +174,7 @@ inline PitchEstimate estimateF0(const float *mag, size_t n, const PitchConfig &c
     const size_t bins = n / 2 + 1;
 
     float mx = 0.0f;
-    for (size_t i = 1; i < bins; ++i) if (isfinite(mag[i]) && mag[i] > mx) mx = mag[i];
+    for (size_t i = 1; i < bins; ++i) if (std::isfinite(mag[i]) && mag[i] > mx) mx = mag[i];
     if (!(mx > 0.0f)) return e;
     const float flr = c.floor_rel * mx;
 
@@ -198,7 +199,7 @@ inline PitchEstimate estimateF0(const float *mag, size_t n, const PitchConfig &c
         const float  mk = mag[kb];
         const bool   peak = (kb < 1 || mag[kb - 1] <= mk) &&
                             (kb + 1 >= bins || mag[kb + 1] <= mk);
-        ok[i] = isfinite(mk) && mk >= cand_floor && peak;
+        ok[i] = std::isfinite(mk) && mk >= cand_floor && peak;
         // **best 只在合格候选里取。** 第一版没加这个限制，结果 k₀/3 那个
         // 「靠泄漏蹭出来的」高分把 margin 门槛抬到没人够得着，纯音直接判成无音高。
         if (ok[i] && sc[i] > best) best = sc[i];
@@ -227,14 +228,14 @@ inline PitchEstimate estimateF0(const float *mag, size_t n, const PitchConfig &c
     double tot = 0.0, har = 0.0;
     for (size_t i = 1; i < bins; ++i) {
         const float m = mag[i];
-        if (isfinite(m)) tot += (double)m * m;
+        if (std::isfinite(m)) tot += (double)m * m;
     }
     for (int h = 1; h <= c.harmonics; ++h) {
         const size_t ctr = k_pick * (size_t)h;
         if (ctr >= bins) break;
         for (size_t d = (ctr > 0 ? ctr - 1 : 0); d <= ctr + 1 && d < bins; ++d) {
             const float m = mag[d];
-            if (isfinite(m)) har += (double)m * m;
+            if (std::isfinite(m)) har += (double)m * m;
         }
     }
     float conf = (tot > 0.0) ? (float)(har / tot) : 0.0f;
@@ -260,7 +261,7 @@ inline PitchEstimate estimateF0(const float *mag, size_t n, const PitchConfig &c
 // 跟踪。小音程滑过去，跳进直接落位；短暂无音高时保持住。
 inline void pitchUpdate(PitchTracker &t, const PitchConfig &c,
                         const PitchEstimate &e, float dt_ms) {
-    if (!isfinite(dt_ms) || dt_ms <= 0.0f) return;
+    if (!std::isfinite(dt_ms) || dt_ms <= 0.0f) return;
 
     if (!e.voiced) {
         t.unvoiced_ms += dt_ms;

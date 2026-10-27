@@ -9,6 +9,7 @@
 // 纯逻辑，零 WLED 依赖。
 #pragma once
 
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 #include <stdint.h>
 #include <stddef.h>
 
@@ -137,7 +138,7 @@ inline float spectralCentroid(const float *bands) {
     double num = 0.0, den = 0.0;
     for (int i = 0; i < NUM_BANDS; ++i) {
         const float e = bands[i];
-        if (!isfinite(e) || e <= 0.0f) continue;
+        if (!std::isfinite(e) || e <= 0.0f) continue;
         num += (double)bandCenterHz(i) * e;
         den += e;
     }
@@ -154,7 +155,7 @@ inline float spectralFlatness(const float *bands) {
     int n = 0;
     for (int i = 0; i < NUM_BANDS; ++i) {
         const float e = bands[i];
-        if (!isfinite(e) || e < 0.0f) continue;
+        if (!std::isfinite(e) || e < 0.0f) continue;
         // 加一个极小的地板，否则任何一段为 0 都会让几何平均整体归零，
         // 而那在音乐里很常见（高频段常常真的没能量）
         const double v = (double)e + 1e-9;

@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cmath>   // std::isfinite 等：V5 工具链（picolibc）不在全局命名空间提供
 
 #include "lamp_geometry.h"
 #include "lamp_color.h"
@@ -308,7 +309,7 @@ inline float perceptual(float e) {
 // 只剩形状；乘回 dynamics，pp 与 ff 的差别才回得来。
 // 压得死的流行/电子上 dynamics 恒接近 1，等于没这一项。
 inline void fxSpectrumBars(const AudioFrame &f, const Geometry &g, Rgb *out) {
-    const float dyn = isfinite(f.dynamics) ? clamp01(f.dynamics) : 1.0f;
+    const float dyn = std::isfinite(f.dynamics) ? clamp01(f.dynamics) : 1.0f;
     for (int s = 0; s < 2; ++s) {
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
             const float u   = (float)i / (float)(LEDS_PER_TUBE - 1);
@@ -361,7 +362,7 @@ constexpr float kFxChromaTauMs = 80.0f;
 constexpr float kFxKeyHueTauMs = 600.0f;
 
 inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float dt_ms) {
-    if (!isfinite(dt_ms) || dt_ms <= 0.0f) return;
+    if (!std::isfinite(dt_ms) || dt_ms <= 0.0f) return;
 
     const float decay_ms = (f.beat_locked && f.bpm > 1.0f)
                          ? (60000.0f / f.bpm) * c.decay_beats
@@ -370,7 +371,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
 
     for (int i = 0; i < NUM_BANDS; ++i) {
         float e = f.bands[i] * kFxBandScale;
-        if (!isfinite(e) || e < 0.0f) e = 0.0f;
+        if (!std::isfinite(e) || e < 0.0f) e = 0.0f;
         if (e > 1.0f) e = 1.0f;
         if (e > st.bar[i]) st.bar[i] = e;              // 冲高：立刻，不做平滑
         else               st.bar[i] += a * (e - st.bar[i]);   // 掉落：按拍
@@ -396,7 +397,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
         if (f.onset && st.impact_cool <= 0.0f) {
             float pe = 0.0f;
             for (int i = 0; i < NUM_BANDS; ++i) {
-                if (isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) pe += f.bands_p[i];
+                if (std::isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) pe += f.bands_p[i];
             }
             float e = pe * kFxBandScale * 0.6f + 0.55f;
             if (e > 1.0f) e = 1.0f;
@@ -434,9 +435,9 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // trend 在零附近来回时，按符号切会让整条光带反复抽搐。
     const float beat_ms = (f.beat_locked && f.bpm > 1.0f) ? (60000.0f / f.bpm) : 0.0f;
     const float cycle_ms = (beat_ms > 0.0f) ? beat_ms * c.flow_beats : c.flow_free_ms;
-    float mo = isfinite(f.mood) ? f.mood : 0.0f;
+    float mo = std::isfinite(f.mood) ? f.mood : 0.0f;
     if (mo < 0.0f) mo = 0.0f; if (mo > 1.0f) mo = 1.0f;
-    float tr = isfinite(f.energy_trend) ? f.energy_trend : 0.0f;
+    float tr = std::isfinite(f.energy_trend) ? f.energy_trend : 0.0f;
     if (tr < -1.0f) tr = -1.0f; if (tr > 1.0f) tr = 1.0f;
     if (cycle_ms > 1.0f) {
         st.flow += (dt_ms / cycle_ms) * (0.6f + 0.8f * mo) * (0.35f + tr);
@@ -467,7 +468,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     if (f.f0_voiced) {
         const int c0 = (int)(st.f0_u * (float)(LEDS_PER_TUBE - 1) + 0.5f);
         float lvl = f.rms_fast * kFxLevelScale;
-        if (!isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
+        if (!std::isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
         if (lvl > 1.0f) lvl = 1.0f;
         const float v = lvl * (0.4f + 0.6f * f.f0_conf);
         // 升余弦光斑而不是高斯：高斯的尾巴掉得太快，±4 处只剩 1.8%，
@@ -485,7 +486,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // 色度平滑。单帧色度抖得厉害，直接画会闪成一片。
     for (int i = 0; i < kChroma; ++i) {
         float v = f.chroma[i];
-        if (!isfinite(v) || v < 0.0f) v = 0.0f;
+        if (!std::isfinite(v) || v < 0.0f) v = 0.0f;
         st.chroma[i] += ac * (v - st.chroma[i]);
     }
 
@@ -506,7 +507,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // 和声变化的余波：换和弦时冲一下，然后按拍衰减
     {
         float hm = f.harmony_move * 4.0f;
-        if (!isfinite(hm) || hm < 0.0f) hm = 0.0f;
+        if (!std::isfinite(hm) || hm < 0.0f) hm = 0.0f;
         if (hm > 1.0f) hm = 1.0f;
         if (hm > st.flash) st.flash = hm;
         else               st.flash += a * (hm - st.flash);
@@ -517,7 +518,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // 这里要一个永远可用的拍长。
     const float beat_any = (f.beat_locked && f.bpm > 1.0f) ? (60000.0f / f.bpm) : 500.0f;
     auto clamp01 = [](float v) {
-        if (!isfinite(v) || v < 0.0f) return 0.0f;
+        if (!std::isfinite(v) || v < 0.0f) return 0.0f;
         return v > 1.0f ? 1.0f : v;
     };
     const float lvl = clamp01(f.rms_fast * kFxLevelScale);
@@ -532,7 +533,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
         // 均值亮度 0.4%）。对齐冲击柱定稿：打击路能量 + 保底。
         float pe = 0.0f;
         for (int i = 0; i < NUM_BANDS; ++i) {
-            if (isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) pe += f.bands_p[i];
+            if (std::isfinite(f.bands_p[i]) && f.bands_p[i] > 0.0f) pe += f.bands_p[i];
         }
         float hit = pe * kFxBandScale * 0.6f + 0.55f;
         if (hit > 1.0f) hit = 1.0f;
@@ -618,7 +619,7 @@ inline void fxAdvance(FxState &st, const FxConfig &c, const AudioFrame &f, float
     // 极光：三条极慢的相位。速度只被 energy_trend 轻微推动 ——
     // 这是唯一一个**不追随瞬时声音**的效果，它画的是几十秒的走向。
     {
-        const float sp = 1.0f + 0.6f * (isfinite(f.energy_trend) ? f.energy_trend : 0.0f);
+        const float sp = 1.0f + 0.6f * (std::isfinite(f.energy_trend) ? f.energy_trend : 0.0f);
         const float step = dt_ms / c.aurora_ms * sp;
         const float mul[3] = {1.0f, 0.61f, 1.37f};
         for (int i = 0; i < 3; ++i) {
@@ -773,13 +774,13 @@ inline void fxChromaRing(const FxState &st, const AudioFrame &f,
 //   底色跟调性走，没调性时用色相流动自己的相位。
 struct FlowParams { float base, span, sat, lvl; };
 inline FlowParams flowParams(const FxState &st, const AudioFrame &f) {
-    float mo = isfinite(f.mood) ? f.mood : 0.0f;
+    float mo = std::isfinite(f.mood) ? f.mood : 0.0f;
     if (mo < 0.0f) mo = 0.0f; if (mo > 1.0f) mo = 1.0f;
     FlowParams p;
     p.span = 0.10f + 0.80f * mo;
     p.sat  = 0.75f + 0.25f * mo;
     float lvl = (f.rms_slow * 2.0f + f.rms_fast * 0.5f) * kFxLevelScale;
-    if (!isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
+    if (!std::isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
     if (lvl > 1.0f) lvl = 1.0f;
     p.lvl  = lvl;
     p.base = (f.key_root >= 0 && f.key_conf > 0.15f) ? (float)f.key_root / (float)kChroma : st.key_hue;
@@ -1000,7 +1001,7 @@ inline void fxFormantRibbon(const FxState &st, const AudioFrame &f,
             int b = lo + (int)(u * n);
             if (b > hi) b = hi;
             float e = f.bands_h[b] * kFxBandScale;
-            if (!isfinite(e) || e < 0.0f) e = 0.0f;
+            if (!std::isfinite(e) || e < 0.0f) e = 0.0f;
             out[mapPixel(g, (Side)s, u)] =
                 hsv(0.08f + 0.34f * (float)(b - lo) / (float)n, 0.8f, perceptual(e));
         }
@@ -1015,8 +1016,8 @@ inline void fxDuetSplit(const FxState &st, const AudioFrame &f,
         const float u = (float)i / (float)(LEDS_PER_TUBE - 1);
         const int b = (int)(u * NUM_BANDS) < NUM_BANDS ? (int)(u * NUM_BANDS) : NUM_BANDS - 1;
         float eh = f.bands_h[b] * kFxBandScale, ep = f.bands_p[b] * kFxBandScale;
-        if (!isfinite(eh) || eh < 0.0f) eh = 0.0f;
-        if (!isfinite(ep) || ep < 0.0f) ep = 0.0f;
+        if (!std::isfinite(eh) || eh < 0.0f) eh = 0.0f;
+        if (!std::isfinite(ep) || ep < 0.0f) ep = 0.0f;
         // 人声那根随人声存在度提亮，让「谁在唱」看得出来
         out[mapPixel(g, SIDE_L, u)] =
             hsv(st.key_hue + 0.06f, 0.55f, perceptual(eh) * (0.55f + 0.45f * st.voc));
@@ -1071,10 +1072,10 @@ inline void fxMoodGradient(const FxState &st, const AudioFrame &f,
                            const Geometry &g, Rgb *out) {
     if (f.gated || !(f.rms_fast > 0.003f)) return;   // 理由同 fxVocalBreath
     float m = f.mood;
-    if (!isfinite(m)) m = 0.5f;
+    if (!std::isfinite(m)) m = 0.5f;
     if (m < 0.0f) m = 0.0f; if (m > 1.0f) m = 1.0f;
     float d = f.dynamics;
-    if (!isfinite(d) || d < 0.0f) d = 0.0f; if (d > 1.0f) d = 1.0f;
+    if (!std::isfinite(d) || d < 0.0f) d = 0.0f; if (d > 1.0f) d = 1.0f;
     const float base = 0.58f - 0.55f * m;            // 静=青蓝(0.58) 躁=红(0.03)
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
@@ -1092,7 +1093,7 @@ inline void fxSlowAurora(const FxState &st, const AudioFrame &f,
                          const Geometry &g, Rgb *out) {
     if (f.gated || !(f.rms_fast > 0.003f)) return;   // 理由同 fxVocalBreath
     float m = f.mood;
-    if (!isfinite(m)) m = 0.5f;
+    if (!std::isfinite(m)) m = 0.5f;
     if (m < 0.0f) m = 0.0f; if (m > 1.0f) m = 1.0f;
     for (int s = 0; s < 2; ++s)
         for (uint16_t i = 0; i < LEDS_PER_TUBE; ++i) {
@@ -1281,7 +1282,7 @@ inline void zoneColorFlow(const FxState &st, const AudioFrame &f, const Geometry
 inline void zoneSlowAurora(const FxState &st, const AudioFrame &f, const Geometry &g, Rgb *out) {
     if (f.gated || !(f.rms_fast > 0.003f)) return;
     float m = f.mood;
-    if (!isfinite(m)) m = 0.5f;
+    if (!std::isfinite(m)) m = 0.5f;
     if (m < 0.0f) m = 0.0f; if (m > 1.0f) m = 1.0f;
     for (int s = 0; s < 2; ++s)
         for (uint16_t k = 0; k < RING_LEDS; ++k) {
