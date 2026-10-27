@@ -1,0 +1,8 @@
+# WLED 的 Arduino 依赖库，按上游 main（17.0.0-devV5）platformio.ini 的 V5 版本锁定。
+# 名称 = components/<名称>；ref 为 tag 或 commit。setup.sh 取完核对 HEAD。
+# 名称             仓库                                                ref
+AsyncTCP           https://github.com/ESP32Async/AsyncTCP.git          v3.4.10
+ESPAsyncWebServer  https://github.com/Aircoookie/ESPAsyncWebServer.git ac44e32abf2a69ae650412fb6bc193c59ccac38a
+NeoPixelBus        https://github.com/Makuna/NeoPixelBus.git           76afe832f74b0738a3fa1bba0caf389ade9e7693
+AsyncMqttClient    https://github.com/marvinroger/async-mqtt-client.git v0.9.0
+arduinoFFT         https://github.com/kosme/arduinoFFT.git             v2.0.1

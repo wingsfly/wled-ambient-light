@@ -1,0 +1,15 @@
+# Name,          Type, SubType,  Offset,   Size,     Flags
+# 原厂板 WLED+Matter 三合一布局。esp_secure_cert / nvs_keys / nova_lamp 三个加密分区
+# 与原厂 partitions_8m.csv 逐项一致（内容是密文，offset 变了就解不开）。
+# app 分区起始必须 64K 对齐（gen_esp32part ALIGNMENT[APP_TYPE]=0x10000），
+# 所以 ota_1 从 nova_lamp 之后的下一个 64K 边界 0x520000 开始，0x515000–0x520000 留空。
+esp_secure_cert, 0x3F,  ,        0xd000,   8k,       encrypted
+nvs,             data,  nvs,     0x10000,  196k,
+nvs_keys,        data,  nvs_keys,0x41000,  4k,       encrypted
+otadata,         data,  ota,     0x42000,  8k,
+phy_init,        data,  phy,     0x44000,  8k,
+ota_0,           app,   ota_0,   0x50000,  2944k,
+spiffs,          data,  spiffs,  0x330000, 1912k,
+fctry,           data,  nvs,     0x50e000, 24k,
+nova_lamp,       data,  0x40,    0x514000, 4k,       encrypted
+ota_1,           app,   ota_1,   0x520000, 2944k,

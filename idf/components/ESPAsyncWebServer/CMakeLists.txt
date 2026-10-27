@@ -1,0 +1,5 @@
+include("${CMAKE_CURRENT_LIST_DIR}/../arduino_deps.cmake")
+set(LIB "${CMAKE_CURRENT_LIST_DIR}/../../libs/ESPAsyncWebServer")
+file(GLOB_RECURSE SRCS "${LIB}/src/*.cpp" "${LIB}/src/*.c")
+idf_component_register(SRCS ${SRCS} INCLUDE_DIRS "${LIB}/src" REQUIRES ${ARDUINO_IDF_DEPS} AsyncTCP)
+target_compile_options(${COMPONENT_LIB} PRIVATE ${ARDUINO_WARN_RELAX})

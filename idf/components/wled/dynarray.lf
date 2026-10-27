@@ -1,0 +1,16 @@
+# WLED 的 usermod 用 REGISTER_USERMOD 放进 .dynarray.usermods.<n> 段，靠 begin(.0)/end(.99999)
+# 两个零长数组夹住。PlatformIO 下由 pio-scripts/dynarray.py 往 sections.ld 的 .flash.rodata
+# 里插 KEEP(*(SORT_BY_INIT_PRIORITY(.dynarray.*)))；IDF 的 sections.ld 由 ldgen 生成，用片段做同样的事。
+[sections:wled_dynarray]
+entries:
+    .dynarray+
+
+[scheme:wled_dynarray]
+entries:
+    wled_dynarray -> flash_rodata
+
+[mapping:wled_dynarray]
+archive: libwled.a
+entries:
+    * (wled_dynarray);
+        wled_dynarray -> flash_rodata KEEP() SORT(init_priority)

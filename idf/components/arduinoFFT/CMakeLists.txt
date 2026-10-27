@@ -1,0 +1,6 @@
+include("${CMAKE_CURRENT_LIST_DIR}/../arduino_deps.cmake")
+set(LIB "${CMAKE_CURRENT_LIST_DIR}/../../libs/arduinoFFT")
+file(GLOB_RECURSE SRCS "${LIB}/src/*.cpp" "${LIB}/src/*.c")
+idf_component_register(SRCS ${SRCS} INCLUDE_DIRS "${LIB}/src" REQUIRES ${ARDUINO_IDF_DEPS})
+target_compile_options(${COMPONENT_LIB} PRIVATE ${ARDUINO_WARN_RELAX})
+target_compile_definitions(${COMPONENT_LIB} PRIVATE sqrt_internal=sqrtf)

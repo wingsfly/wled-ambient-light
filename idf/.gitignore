@@ -1,0 +1,10 @@
+/build/
+/vendor/
+/libs/
+/managed_components/
+/.bootstrap/
+/sdkconfig
+/sdkconfig.old
+/secure_boot_signing_key.pem
+*.pem
+*.log
