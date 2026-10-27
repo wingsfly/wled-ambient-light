@@ -45,7 +45,10 @@
 #if defined(CONFIG_IDF_TARGET_ESP32) && (ESP_IDF_VERSION_MAJOR < 5)
 #define AR_ANALOG_MIC_I2S_ADC          // legacy ADC-over-I2S (classic ESP32, IDF v4 only)
 #endif
-#if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)) && defined(SOC_ADC_SUPPORTED)
+// lamp fork：上游门槛是 IDF 5.5；原厂板三合一被 esp-matter v1.4 钉在 IDF 5.4.1。WLEDAdcManager 用到的
+// adc_continuous / adc_oneshot / adc_cali API 在 5.4.1 里全都有，降到 5.4（运行时待原厂板麦克风实测）。
+// 与 lib/wled_ADCmanager 及 wled00/wled.h 的同名守卫保持一致。
+#if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)) && defined(SOC_ADC_SUPPORTED)
 #define AR_ANALOG_MIC_ADC_CONTINUOUS   // ADC manager is used to take care of continuous DMA ADC sampling, compatible with analogRead()
 #endif
 #if defined(AR_ANALOG_MIC_I2S_ADC) || defined(AR_ANALOG_MIC_ADC_CONTINUOUS)

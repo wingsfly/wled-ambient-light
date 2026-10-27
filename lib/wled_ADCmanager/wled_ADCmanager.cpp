@@ -23,7 +23,7 @@ Note: C6 chip revision 0 and 1 have a hardware bug and the effective ADC resolut
 #include "wled.h"
 
 #ifdef ARDUINO_ARCH_ESP32
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)  // lamp fork：上游 5.5，见 audioreactive/audio_source.h
 
 // prevent macro recursion of arduino overrides
 #undef analogRead
@@ -366,5 +366,5 @@ int WLEDAdcManager::analogReadMilliVolts(uint8_t pin) {
   if ((_cali || _initCali()) && adc_cali_raw_to_voltage(_cali, raw, &mv) == ESP_OK) return mv;
   return (raw * 3300) / 4095; // fallback to linear conversion if calibration fails
 }
-#endif // ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+#endif // ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
 #endif // ARDUINO_ARCH_ESP32

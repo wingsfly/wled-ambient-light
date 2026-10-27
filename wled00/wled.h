@@ -115,7 +115,7 @@
     #include <LittleFS.h>
   #endif
   #include "esp_task_wdt.h"
-  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)  // lamp fork：上游 5.5，见 audioreactive/audio_source.h
   #include <wled_ADCmanager.h>
   #endif
 #endif

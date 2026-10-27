@@ -6,7 +6,7 @@
 #pragma once
 
 #ifdef ARDUINO_ARCH_ESP32
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)  // lamp fork：上游 5.5，见 audioreactive/audio_source.h
 
 #include <stdint.h>
 #include <Arduino.h>
@@ -66,5 +66,5 @@ private:
 #define analogReadMilliVolts(pin) WLEDAdcManager::instance().analogReadMilliVolts(pin)
 // ESP8266: do not override analogRead
 // we could add analogReadMilliVolts() which would just return (int)(analogRead(pin) / 1023.0f);
-#endif // ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+#endif // ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
 #endif // ARDUINO_ARCH_ESP32
