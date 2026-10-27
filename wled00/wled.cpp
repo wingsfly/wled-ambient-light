@@ -771,7 +771,13 @@ void WLED::initConnection()
 #endif
 
   DEBUG_PRINTLN(F("WiFi disconnect."));
+#ifdef WLED_KEEP_WIFI_STACK
+  // lamp fork：与别的协议栈（如 Matter）共用 Wi-Fi 时不能关掉 Wi-Fi —— 它持有网口与事件处理，
+  // mdns 等组件还缓存着网口指针。只断开当前连接。
+  WiFi.disconnect(false);
+#else
   WiFi.disconnect(true); // close old connections
+#endif
   delay(5);              // wait for hardware to be ready
 #ifdef ESP8266
   WiFi.setPhyMode(force802_3g ? WIFI_PHY_MODE_11G : WIFI_PHY_MODE_11N);
@@ -781,6 +787,15 @@ void WLED::initConnection()
   getWLEDhostname(hostname, sizeof(hostname), true); // create DNS name based on mDNS name if set, or fall back to standard WLED server name
 
 #ifdef ARDUINO_ARCH_ESP32
+#ifdef WLED_KEEP_WIFI_STACK
+  // lamp fork：不做 WIFI_MODE_NULL 的拆除重建（Arduino 会 esp_wifi_deinit 并销毁 STA 网口）。
+  // 保持原语义：AP 照样关掉（AP+STA → STA，STA 一直开着，不会落到 NULL）；主机名直接设到现有
+  // STA 网口，下次 DHCP 生效。发射功率在下面 setTxPower 照常设。
+  if (apActive) WiFi.softAPdisconnect(true);
+  apActive = false;
+  WiFi.setHostname(hostname);
+  esp_netif_set_hostname(WiFi.STA.netif(), hostname);
+#else
   // Reset mode to NULL to force a full STA mode transition, so that WiFi.mode(WIFI_STA) below actually applies the hostname (and TX power, etc.).
   // This is required on reconnects when mode is already WIFI_STA.
   DEBUG_PRINTLN(F("WiFi mode_null: driver teardown / re-init."));
@@ -788,6 +803,7 @@ void WLED::initConnection()
   apActive = false;           // the AP is physically torn down by WIFI_MODE_NULL
   delay(5);                   // give the WiFi stack time to complete the mode transition
   WiFi.setHostname(hostname);
+#endif
 #endif
 
   if (multiWiFi.empty()) {                       // guard: handle empty WiFi list safely
