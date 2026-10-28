@@ -949,6 +949,18 @@ void WLED::initInterfaces()
 
   // Set up mDNS responder:
   if (strlen(cmDNS) > 0) {
+#ifdef WLED_KEEP_WIFI_STACK
+    // lamp fork：mdns 与别的协议栈（如 Matter）共用。MDNS.end() 就是 mdns_free()，会把对方注册的服务
+    // （_matter._tcp）一起销毁；主机名也归对方（Matter 每次发布都 mdns_hostname_set 成自己的名字，WLED 再设
+    // 只会来回改）。这里只补 WLED 自己的服务，wled-xxxx.local 因此不可用，_wled._tcp 仍可发现。
+    if (!mdns_service_exists("_wled", "_tcp", NULL)) {
+      mdns_init(); // already initialized by the other stack: ESP_ERR_INVALID_STATE, harmless
+      MDNS.addService("http", "tcp", 80);
+      MDNS.addService("wled", "tcp", 80);
+      MDNS.addServiceTxt("wled", "tcp", "mac", escapedMac.c_str());
+      DEBUG_PRINTLN(F("mDNS services added"));
+    }
+#else
     // "end" must be called before "begin" is called a 2nd time
     // see https://github.com/esp8266/Arduino/issues/7213
     MDNS.end();
@@ -958,6 +970,7 @@ void WLED::initInterfaces()
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("wled", "tcp", 80);
     MDNS.addServiceTxt("wled", "tcp", "mac", escapedMac.c_str());
+#endif
   }
   server.begin();
 

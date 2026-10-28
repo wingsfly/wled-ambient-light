@@ -281,6 +281,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
                   "The default pin list defined in DATA_PINS does not match the pin requirements for the default buses defined in LED_TYPES");
 
     unsigned pinsIndex = 0;
+    unsigned start = 0; // lamp fork: consecutive default buses (previously every bus started at 0 and overlapped)
     for (unsigned i = 0; i < WLED_MAX_BUSSES; i++) {
       uint8_t defPin[OUTPUT_MAX_PINS];
       // if we have less types than requested outputs and they do not align, use last known type to set current type
@@ -340,10 +341,10 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
 
       // if we have less counts than pins and they do not align, use last known count to set current count
       unsigned count = defCounts[(i < defNumCounts) ? i : defNumCounts -1];
-      unsigned start = 0;
       // analog always has length 1
       if (Bus::isPWM(dataType) || Bus::isOnOff(dataType)) count = 1;
       busConfigs.emplace_back(dataType, defPin, start, count, DEFAULT_LED_COLOR_ORDER, false, 0, RGBW_MODE_MANUAL_ONLY, 0, LED_MILLIAMPS_DEFAULT, ABL_MILLIAMPS_DEFAULT, DEFAULT_LED_DRIVER);
+      start += count;
       doInitBusses = true;  // finalization done in beginStrip()
     }
   }
