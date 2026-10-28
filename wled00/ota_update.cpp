@@ -330,6 +330,9 @@ void handleOTAData(AsyncWebServerRequest *request, size_t index, uint8_t *data, 
   if (context->replySent || (context->errorMessage.length())) return;
 
   if (index == 0) {
+    // lamp fork：AsyncWebServer 给每个请求 3 s 接收超时；Wi-Fi 有 1–3 s 卡顿的板子（省电 + BLE 共存）上
+    // 上传会在随机位置被掐断。OTA 上传放宽到 30 s
+    request->client()->setRxTimeout(30);
     if (!beginOTA(request, context)) return;
 
     #ifdef SUPPORT_GZIPPED_OTA
