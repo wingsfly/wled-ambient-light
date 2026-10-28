@@ -506,7 +506,9 @@ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",
 })();
 </script>
 <script>
-/* lamp fork：♪ 分析仪表（特效页底部）。展开时 10Hz 轮询 /lampdata，
+/* lamp fork：♪ 分析仪表（特效页底部）。展开时最快 10Hz 轮询 /lampdata（上一个回来才发下一个，
+   链路慢时自动降频 —— 用 setInterval 会在慢链路上堆积请求，占满 WLED 的 6 个请求位，
+   其它请求全被 503，UI 报 Failed to fetch，原厂台灯板实测），
    canvas 局部绘制：16 段频谱 / 12 音级色度 / 拍点相位 / 调性人声档位。
    折叠零请求。与电流卡片同款局部刷新模式，不触发 UI 全局重绘。 */
 (function(){
@@ -558,11 +560,13 @@ function draw(d){
     (d.emo !== undefined && d.emo < 8 ?
       " · 语义 <b>"+EMO[d.emo]+"</b>（愉悦 "+(d.val>0?"+":"")+d.val.toFixed(1)+"）" : "");
 }
-function tick(){
-  fetch(getURL("/lampdata")).then(function(r){return r.json();}).then(draw).catch(function(){});
+var gen=0; // 每次展开换一代，折叠后在途请求回来不再续链
+function tick(g){
+  fetch(getURL("/lampdata")).then(function(r){return r.json();}).then(draw).catch(function(){})
+    .then(function(){ if(timer && g===gen) timer=setTimeout(function(){tick(g);},100); });
 }
-function unfold(){el("lvBody").style.display="";el("lvArrow").textContent="▾";tick();timer=setInterval(tick,100);localStorage.setItem(KEY,"1");}
-function fold(){el("lvBody").style.display="none";el("lvArrow").textContent="▸";clearInterval(timer);timer=null;localStorage.setItem(KEY,"0");}
+function unfold(){el("lvBody").style.display="";el("lvArrow").textContent="▾";timer=true;tick(++gen);localStorage.setItem(KEY,"1");}
+function fold(){el("lvBody").style.display="none";el("lvArrow").textContent="▸";if(timer!==true)clearTimeout(timer);timer=null;localStorage.setItem(KEY,"0");}
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",build);else build();
 })();
 </script>
