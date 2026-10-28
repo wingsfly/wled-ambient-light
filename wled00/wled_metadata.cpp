@@ -137,7 +137,7 @@ static inline String bufToString(const char (&buf)[len]) {
   char sbuf[len+1];
   size_t real_len = strnlen(buf, len);
   memcpy(sbuf, buf, real_len);
-  sbuf[len] = '\0';
+  sbuf[real_len] = '\0'; // lamp fork: was sbuf[len], leaving stack garbage after a name shorter than the buffer
   return sbuf;
 }
 
