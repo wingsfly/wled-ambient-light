@@ -64,6 +64,7 @@ class AutoSaveUsermod : public Usermod {
     uint8_t knownMode = 0;
     uint32_t knownColor = 0;   // lamp fork：主段第一色 —— 上游只盯亮度/速度/强度/模式/调色板，纯换色不触发自动保存
     uint8_t knownPalette = 0;
+    bool updating = false;     // lamp fork：OTA 进行中，见 onUpdateBegin()
 
     #ifdef USERMOD_FOUR_LINE_DISPLAY
     FourLineDisplayUsermod* display;
@@ -130,7 +131,7 @@ class AutoSaveUsermod : public Usermod {
     void loop() {
       static unsigned long lastRun = 0;
       unsigned long now = millis();
-      if (!autoSaveAfterSec || !enabled || (autoSaveIgnorePresets && currentPreset>0) || (strip.isUpdating() && now - lastRun < 240)) return;  // setting 0 as autosave seconds disables autosave
+      if (updating || !autoSaveAfterSec || !enabled || (autoSaveIgnorePresets && currentPreset>0) || (strip.isUpdating() && now - lastRun < 240)) return;  // setting 0 as autosave seconds disables autosave
       lastRun = now;
       uint8_t currentMode = strip.getMainSegment().mode;
       uint8_t currentPalette = strip.getMainSegment().palette;
@@ -163,6 +164,21 @@ class AutoSaveUsermod : public Usermod {
         saveSettings();
         displayOverlay();
       }
+    }
+
+    // lamp fork：OTA 开始时 WLED 先 resetSegments() 腾内存，新段是纯色黑，且不经 stateUpdated()。上传常超过存档延时，
+    // 不挡住就把黑色存进开机预设，下次开机灯不亮（2026-10-28 原厂板实测，每推一次网页 OTA 存一次）。
+    // 失败恢复后把当前（已被重置的）状态记为已知，同样不存。
+    void onUpdateBegin(bool init) {
+      updating = init;
+      autoSaveAfter = 0;
+      if (init) return;
+      knownBrightness = bri;
+      knownEffectSpeed = effectSpeed;
+      knownEffectIntensity = effectIntensity;
+      knownMode = strip.getMainSegment().mode;
+      knownPalette = strip.getMainSegment().palette;
+      knownColor = strip.getMainSegment().colors[0];
     }
 
     /*
