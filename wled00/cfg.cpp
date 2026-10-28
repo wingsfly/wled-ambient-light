@@ -13,6 +13,9 @@
 #ifndef DATA_PINS
   #define DATA_PINS DEFAULT_LED_PIN
 #endif
+#ifndef DEFAULT_LED_DRIVER
+  #define DEFAULT_LED_DRIVER 0 // lamp fork: driver of the default buses, 0=RMT, 1=I2S/LCD (S3: NeoPixelBus' IDF5 RMT method takes all 4 TX memory blocks for one channel)
+#endif
 
 #ifndef LED_TYPES
   #define LED_TYPES DEFAULT_LED_TYPE
@@ -340,7 +343,7 @@ bool deserializeConfig(JsonObject doc, bool fromFS) {
       unsigned start = 0;
       // analog always has length 1
       if (Bus::isPWM(dataType) || Bus::isOnOff(dataType)) count = 1;
-      busConfigs.emplace_back(dataType, defPin, start, count, DEFAULT_LED_COLOR_ORDER, false, 0, RGBW_MODE_MANUAL_ONLY, 0, LED_MILLIAMPS_DEFAULT, ABL_MILLIAMPS_DEFAULT, 0); // driver=0 (RMT default)
+      busConfigs.emplace_back(dataType, defPin, start, count, DEFAULT_LED_COLOR_ORDER, false, 0, RGBW_MODE_MANUAL_ONLY, 0, LED_MILLIAMPS_DEFAULT, ABL_MILLIAMPS_DEFAULT, DEFAULT_LED_DRIVER);
       doInitBusses = true;  // finalization done in beginStrip()
     }
   }
