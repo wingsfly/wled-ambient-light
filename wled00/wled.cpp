@@ -277,6 +277,12 @@ void WLED::loop()
   if (doReboot && (!doInitBusses || !configNeedsWrite)) // if busses have to be inited & saved, wait until next iteration
     reset();
 
+#if defined(ARDUINO_ARCH_ESP32) && defined(WLED_LOOP_IDLE_MS)
+  // lamp fork：Arduino 的 yield() 只让给同级以上的任务，loopTask（1 级）一直就绪，CPU1 的空闲任务（0 级）永远轮不到 ——
+  // 上游靠关掉 CPU1 的空闲看门狗检查掩盖。每轮让出一下：帧节奏由 strip.service() 按时间控制，不受影响
+  vTaskDelay(pdMS_TO_TICKS(WLED_LOOP_IDLE_MS));
+#endif
+
 // DEBUG serial logging (every 30s)
 #ifdef WLED_DEBUG
   loopMillis = millis() - loopMillis;
