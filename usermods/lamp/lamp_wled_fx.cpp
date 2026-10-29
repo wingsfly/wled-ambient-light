@@ -398,10 +398,12 @@ void modeLampCommon(FxId id) {
   lampTrace = 1;
   bridge.fill(millis());
   lampTrace = 2;
-  if (!SEGENV.data) {
-    if (!SEGENV.allocateData(sizeof(FxState))) return;  // 内存不足：本帧空过
-    new (SEGENV.data) FxState();           // 默认成员值靠 placement-new 落位
-  }
+  // 每帧都要 allocateData：V5 换效果时上一个效果不大的数据缓冲只清零不释放（resetIfRequired），
+  // 只判空就会把别的效果留下的小缓冲当 FxState 写，越界写坏堆（2026-10-29 原厂台灯板，
+  // 从讯飞场景 / ♪ 讯飞音乐切进 ♪ 效果即崩）。缓冲不够大时 allocateData 会重新分配。
+  const bool fresh = SEGENV.call == 0 || SEGENV.dataSize() < sizeof(FxState);
+  if (!SEGENV.allocateData(sizeof(FxState))) return;  // 内存不足：本帧空过
+  if (fresh) new (SEGENV.data) FxState();  // 默认成员值靠 placement-new 落位
   FxState *st = reinterpret_cast<FxState*>(SEGENV.data);
   lampTrace = 3;
 
