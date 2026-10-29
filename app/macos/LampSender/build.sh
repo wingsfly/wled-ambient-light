@@ -22,8 +22,15 @@ if [ -z "$LAMPKIT" ]; then
 fi
 # 目标三元组必须和下面编 App 的一致，否则模块的最低系统版本对不上。
 (cd "$LAMPKIT" && swift build -c release -Xswiftc -target -Xswiftc "$DEPLOY_TARGET" >/dev/null)
-LK_MODULES="$LAMPKIT/.build/release/Modules"
-LK_OBJECTS=$(ls "$LAMPKIT"/.build/release/LampKit.build/*.o)
+# Swift 6.4 起 SwiftPM 换了构建系统：.build/release 指向 out/Products/Release，里面是合并好的
+# LampKit.o 与 LampKit.swiftmodule，不再有 Modules/ 与逐文件的 .o。两种布局都认。
+if [ -d "$LAMPKIT/.build/release/LampKit.build" ]; then
+  LK_MODULES="$LAMPKIT/.build/release/Modules"
+  LK_OBJECTS=$(ls "$LAMPKIT"/.build/release/LampKit.build/*.o)
+else
+  LK_MODULES="$LAMPKIT/.build/release"
+  LK_OBJECTS="$LAMPKIT/.build/release/LampKit.o"
+fi
 
 echo "[2/6] 编译 liblamp（与固件同一份 C++ 源码）"
 # 最低系统版本要和下面 swiftc 的 -target 一致，否则链接器会警告版本不匹配
