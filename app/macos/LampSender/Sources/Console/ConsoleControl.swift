@@ -276,7 +276,7 @@ struct ConsoleControl: View {
                                           catalog: model.novaCatalog, filter: effectFilter)
         return VStack(alignment: .leading, spacing: 1) {
             ForEach(list) { e in
-                row(e.name, current: model.state?.primary?.fx == e.index) { model.setEffect(e.index) }
+                row(EffectNames.display(e.name), current: model.state?.primary?.fx == e.index) { model.setEffect(e.index) }
             }
             if list.isEmpty { Text("没有匹配的效果").font(.caption).foregroundStyle(.secondary) }
         }
@@ -338,7 +338,7 @@ struct ConsoleControl: View {
 
     private func musicTitle(_ e: MusicEntry) -> String {
         if case .nova = e.kind { return "讯飞 · \(e.name)" }
-        return e.name
+        return EffectNames.display(e.name)
     }
 
     // ── 公用 ─────────────────────────────────────────────
@@ -383,7 +383,7 @@ struct ConsoleControl: View {
             }
             if fx == c.scene.fx, let i = seg.c1, i < c.scene.names.count { return c.scene.names[i].name }
         }
-        return fx < model.effects.count ? model.effects[fx] : nil
+        return fx < model.effects.count ? EffectNames.display(model.effects[fx]) : nil
     }
 
     /// 当前生效的那个效果的说明。跟着灯走而不是跟着点击走 —— 别处（网页、手机）

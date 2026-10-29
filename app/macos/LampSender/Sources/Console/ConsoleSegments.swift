@@ -207,7 +207,7 @@ struct SegmentEditor: View {
                     get: { segment.fx ?? 0 },
                     set: { model.updateSegment(.init(id: id, fx: $0)) })) {
                         ForEach(Array(model.effects.enumerated()), id: \.offset) { i, n in
-                            Text(n).tag(i)
+                            Text(EffectNames.display(n)).tag(i)
                         }
                     }
                 Picker("调色板", selection: Binding(
