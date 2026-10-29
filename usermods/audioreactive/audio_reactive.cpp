@@ -1933,7 +1933,9 @@ class AudioReactive : public Usermod {
           xTaskCreateUniversal(               // xTaskCreateUniversal also works on -S2 and -C3 with single core
             FFTcode,                          // Function to implement the task
             "FFT",                            // Name of the task
-            3592,                             // Stack size in words // 3592 leaves 800-1024 bytes of task stack free
+            // lamp fork：3592 → 6144 字节（IDF 里单位是字节）。ADC 管理器溢出或读错时在本任务里重建连续采样驱动，
+            // 调用链比平常深，原厂台灯板放音乐约 49 s 后栈溢出（2026-10-29）
+            6144,                             // Stack size in words // 3592 leaves 800-1024 bytes of task stack free
             NULL,                             // Task input parameter
             FFTTASK_PRIORITY,                 // Priority of the task
             &FFT_Task                         // Task handle
