@@ -1582,7 +1582,18 @@ class AudioReactive : public Usermod {
         }
       }
 
-      switch (dmType) {
+      // lamp fork：上次是崩溃复位，这次按"无音频源"起（同 255 分支：只在运行期 enabled = false，配置里的值不变，除非之后存了配置）。
+      // 音频驱动出过开机即崩：配置存着 enabled，两个固件槽都崩、网络起不来，只能走串口改文件系统（2026-10-29 原厂台灯板，
+      // ADC 锁换任务释放，见 wled_ADCmanager.cpp）。崩溃复位后先不碰音频，下次正常重启再起。
+      #ifdef ARDUINO_ARCH_ESP32
+      const esp_reset_reason_t resetReason = esp_reset_reason();
+      const bool crashReset = resetReason == ESP_RST_PANIC || resetReason == ESP_RST_INT_WDT ||
+                              resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT;
+      if (enabled && crashReset) DEBUGSR_PRINTF("AR: last reset was a crash (%d) - audio not started this boot\n", resetReason);
+      #else
+      const bool crashReset = false;
+      #endif
+      switch ((enabled && crashReset) ? 255 : dmType) {
         // stub cases for not-yet-supported I2S modes on other ESP32 chips
       #if !defined(AR_ANALOG_MIC_SUPPORTED)  // no analog mic support on this MCU / IDF version
         case 0:  //ADC analog

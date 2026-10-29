@@ -34,6 +34,7 @@ Note: C6 chip revision 0 and 1 have a hardware bug and the effective ADC resolut
 #define ADCMANAGER_LOCK_TIMEOUT_MS 10 // timeout for mutex lock, this should be as short as possible but still allow for readSamples() to complete before doing analogRead()
 
 #include <string.h>
+#include "freertos/timers.h"
 
 struct WLEDAdcManager::ContinuousCtx {
   uint8_t        pin;
@@ -58,6 +59,33 @@ volatile bool _overflow = false;
 static bool IRAM_ATTR _onPoolOvf(adc_continuous_handle_t handle, const adc_continuous_evt_data_t* edata, void* user_data) {
   _overflow = true;   // set the flag
   return false;       // nothing to wake
+}
+
+// lamp fork：ADC1 的锁（newlib 锁，即带持有者的互斥量）由 adc_continuous_start() 拿、adc_continuous_stop() 放，
+// 两者必须在同一个任务里，否则 xTaskPriorityDisinherit 断言重启。上游在调用者任务里启停：begin() 在主循环任务里
+// 启动，FFT 任务读到溢出时 stop/start —— 原厂台灯板一打开音频模块就开机即崩（2026-10-29）。文件头那条"pin-info 页
+// 打开时信号量问题导致崩溃"多半也是它。启停一律交给 FreeRTOS 定时器服务任务执行，持锁者恒为它。
+// 调用方都持着 _mutex，同一时刻只有一个请求。
+static SemaphoreHandle_t s_ctrlDone = nullptr;
+
+struct AdcCtrlReq {
+  adc_continuous_handle_t handle;
+  bool start;
+  esp_err_t err;
+};
+
+static void _adcCtrlRun(void* p, uint32_t) {
+  AdcCtrlReq* req = static_cast<AdcCtrlReq*>(p);
+  req->err = req->start ? adc_continuous_start(req->handle) : adc_continuous_stop(req->handle);
+  xSemaphoreGive(s_ctrlDone);
+}
+
+static esp_err_t _adcCtrl(adc_continuous_handle_t handle, bool start) {
+  if (!s_ctrlDone) s_ctrlDone = xSemaphoreCreateBinary();
+  AdcCtrlReq req = {handle, start, ESP_FAIL};
+  if (!s_ctrlDone || xTimerPendFunctionCall(_adcCtrlRun, &req, 0, portMAX_DELAY) != pdPASS) return ESP_FAIL;
+  xSemaphoreTake(s_ctrlDone, portMAX_DELAY);
+  return req.err;
 }
 
 WLEDAdcManager& WLEDAdcManager::instance() {
@@ -174,7 +202,7 @@ bool WLEDAdcManager::_initContinuousADC() {
     .format         = WLED_ADC_DIGI_FORMAT,
   };
   // initialize and start sampling
-  if (adc_continuous_config(_ctx->handle, &cfg) != ESP_OK || adc_continuous_start(_ctx->handle) != ESP_OK) {
+  if (adc_continuous_config(_ctx->handle, &cfg) != ESP_OK || _adcCtrl(_ctx->handle, true) != ESP_OK) {
     _endContinuousADC();
     return false;
   }
@@ -185,7 +213,7 @@ bool WLEDAdcManager::_initContinuousADC() {
 void WLEDAdcManager::_endContinuousADC() {
   if (!_ctx) return;
   if (_ctx->handle) {
-    adc_continuous_stop(_ctx->handle);
+    _adcCtrl(_ctx->handle, false);
     adc_continuous_deinit(_ctx->handle);
     _ctx->handle = nullptr;
   }
@@ -278,9 +306,9 @@ uint16_t WLEDAdcManager::readSamples(int16_t* buffer, uint16_t numSamples, uint3
     // stalling everything. stop-start takes about 0.3ms and resets the DMA so everything keeps working.
     DEBUG_PRINTF_P(PSTR("ADC buffer overflow"));
     _overflow = false;
-    adc_continuous_stop(_ctx->handle);
+    _adcCtrl(_ctx->handle, false);
     adc_continuous_flush_pool(_ctx->handle); // flush remaining data and make sure pool does not overflow
-    adc_continuous_start(_ctx->handle);
+    _adcCtrl(_ctx->handle, true);
   }
 
   xSemaphoreGive(_mutex);
