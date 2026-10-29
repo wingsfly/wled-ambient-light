@@ -104,7 +104,7 @@ struct ConsoleControl: View {
         }
     }
 
-    /// 速度与强度/灵敏度。♪ 效果把 ix 当灵敏度用；WLED 原生效果里它各有各的含义。
+    /// 速度、强度/灵敏度与调色板。♪ 效果把 ix 当灵敏度用；WLED 原生效果里它各有各的含义。
     @ViewBuilder
     private func effectParams(label: String) -> some View {
         if let seg = model.state?.primary {
@@ -114,6 +114,14 @@ struct ConsoleControl: View {
                 }
                 LabeledSlider(title: "速度", value: seg.sx ?? 128, range: 0...255) { model.setSpeed($0) }
                 LabeledSlider(title: label, value: seg.ix ?? 128, range: 0...255) { model.setIntensity($0) }
+                // 讯飞调色板（原厂板固件注册，「讯飞: …」）排在最前；效果不用调色板时不显示
+                if model.currentUsesPalette {
+                    Picker("调色板", selection: Binding(
+                        get: { seg.pal ?? 0 },
+                        set: { model.setPalette($0) })) {
+                            ForEach(model.paletteChoices) { Text($0.name).tag($0.id) }
+                        }
+                }
                 if mode == .fixed {
                     Text("WLED 原生效果的「强度」含义各不相同（密度、数量、宽度等）。")
                         .font(.caption2).foregroundStyle(.secondary)
