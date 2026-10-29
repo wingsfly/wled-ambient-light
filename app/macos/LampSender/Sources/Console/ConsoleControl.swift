@@ -10,6 +10,8 @@ import LampKit
 /// 点大类只换显示，不改灯；真正改灯的是在里面选颜色、拖色温、点效果。
 ///
 /// 讯飞相关的部分（讯飞灯效、原厂音乐效果）来自原厂板固件的 /nova，自制板上没有就不显示。
+///
+/// 没连上灯时照样显示（快照里的内容），只是改灯的控件全部置灰；切大类、筛列表这类只看不改的照常可用。
 struct ConsoleControl: View {
     @EnvironmentObject private var model: LampViewModel
     @State private var mode: LightMode = .fixed
@@ -20,8 +22,8 @@ struct ConsoleControl: View {
     @State private var customColor = Color.white
 
     var body: some View {
-        if model.state == nil {
-            ContentUnavailableView("未连接", systemImage: "lightbulb.slash",
+        if model.selected == nil {
+            ContentUnavailableView("未选灯", systemImage: "lightbulb.slash",
                                    description: Text("在左侧选一台灯，或手填地址。"))
         } else {
             HSplitView {
@@ -47,6 +49,8 @@ struct ConsoleControl: View {
         if kind != .nova || model.novaCatalog != nil { fixedKind = kind }
     }
 
+    private var off: Bool { !model.connected }
+
     private var fixedKinds: [FixedKind] {
         FixedKind.allCases.filter { $0 != .nova || model.novaCatalog != nil }
     }
@@ -64,6 +68,7 @@ struct ConsoleControl: View {
                     LabeledSlider(title: "亮度", value: bri, range: 1...255) { model.setBrightness($0) }
                 }
             }
+            .disabled(off)
             Picker("", selection: $mode) {
                 ForEach(LightMode.allCases) { Text($0.title).tag($0) }
             }
@@ -81,6 +86,7 @@ struct ConsoleControl: View {
                         .font(.caption2).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .disabled(off)
             case .music:
                 effectParams(label: "灵敏度")
                 sourcePicker
@@ -96,11 +102,12 @@ struct ConsoleControl: View {
                     Stepper("\(dur) 分钟后关", value: Binding(
                         get: { dur }, set: { model.setNightlight(minutes: $0) }), in: 1...255, step: 5)
                 }
-                if let rem = model.state?.nl?.rem, rem > 0 {
+                if let rem = model.state?.nl?.rem, rem > 0, !off {
                     Text("剩余 \(rem / 60) 分 \(rem % 60) 秒")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .disabled(off)
         }
     }
 
@@ -128,6 +135,7 @@ struct ConsoleControl: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .disabled(off)
         }
     }
 
@@ -139,10 +147,11 @@ struct ConsoleControl: View {
                     ForEach(AudioSourceMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden()
+                .disabled(off)
             Text("Local 用板载麦克风或 3.5mm 线路输入；LAMP1 用这台 Mac 送来的分析结果，只有它带语义情绪。")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if let t = model.telemetry {
+            if let t = model.telemetry, !off {
                 HStack {
                     Text("当前生效").font(.caption).foregroundStyle(.secondary)
                     Text(sourceLabel(t.effectiveSource)).font(.caption.bold())
@@ -156,8 +165,11 @@ struct ConsoleControl: View {
     @ViewBuilder
     private var meters: some View {
         group("实时") {
-            if let t = model.telemetry {
+            if let t = model.telemetry, !off {
                 AnalyzerPanel(telemetry: t, compact: true)
+            } else if off {
+                Text("未连接，没有实时数据。").font(.caption).foregroundStyle(.secondary)
+                    .frame(height: 60)
             } else {
                 // 说清楚是在等什么，别让空白看起来像坏了
                 HStack(spacing: 6) {
@@ -241,6 +253,7 @@ struct ConsoleControl: View {
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .disabled(off)
     }
 
     // 讯飞：原厂 7 类 + 场景列表
@@ -294,6 +307,7 @@ struct ConsoleControl: View {
                     Button(name) { model.setWhite(cw: cw) }
                 }
             }
+            .disabled(off)
             Text("色温 \(model.currentCw)（0 暖 … 1000 冷）").font(.caption).foregroundStyle(.secondary)
             Spacer()
         }
@@ -359,6 +373,8 @@ struct ConsoleControl: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // 没连上灯时列表照样能翻能筛，只是点了不切
+        .disabled(off)
     }
 
     private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {

@@ -9,8 +9,8 @@ struct ConsolePresets: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if model.state == nil {
-                ContentUnavailableView("未连接", systemImage: "square.grid.2x2",
+            if model.selected == nil {
+                ContentUnavailableView("未选灯", systemImage: "square.grid.2x2",
                                        description: Text("在左侧选一台灯。"))
             } else {
                 header
@@ -31,7 +31,7 @@ struct ConsolePresets: View {
                 newName = ""
                 showSave = true
             } label: { Label("存为预设", systemImage: "plus") }
-                .disabled(model.state == nil)
+                .disabled(!model.connected)
         }
         .padding(12)
         .alert("存为预设", isPresented: $showSave) {
@@ -75,6 +75,8 @@ struct ConsolePresets: View {
                         Divider()
                         Button("删除", role: .destructive) { model.deletePreset(p.id) }
                     }
+                    // 没连上灯：列表照看，点了不加载
+                    .disabled(!model.connected)
                 }
             }
         }

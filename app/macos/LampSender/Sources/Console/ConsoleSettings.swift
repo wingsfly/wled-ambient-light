@@ -18,14 +18,15 @@ struct ConsoleSettings: View {
 
     var body: some View {
         if model.selected == nil {
-            ContentUnavailableView("未连接", systemImage: "gearshape",
+            ContentUnavailableView("未选灯", systemImage: "gearshape",
                                    description: Text("在左侧选一台灯。"))
         } else {
             HSplitView {
                 sectionList.frame(minWidth: 150, idealWidth: 168, maxWidth: 220)
                 detail.frame(minWidth: 330)
             }
-            .task { if model.configTree == nil { await model.loadConfigTree() } }
+            // 手上的是快照时，连上就换成灯上的
+            .task(id: model.connected) { if model.needsConfigTree { await model.loadConfigTree() } }
         }
     }
 
@@ -103,7 +104,7 @@ struct ConfigGroupPane: View {
                 Spacer()
                 Button("放弃") { model.revertConfig() }
                 Button("保存") { model.saveConfig() }
-                    .keyboardShortcut("s").disabled(model.busy)
+                    .keyboardShortcut("s").disabled(model.busy || !model.connected)
             }
         }
         .padding(10)
@@ -124,7 +125,7 @@ struct ConfigRow: View {
                 Text(field.label)
                     .frame(width: 128, alignment: .leading)
                     .foregroundStyle(isEdited ? Color.orange : .primary)
-                control
+                control.disabled(!model.connected)
                 Spacer(minLength: 0)
             }
             if let h = field.hint {
@@ -195,6 +196,7 @@ struct RawConfigPane: View {
                 TextField("按路径筛选，如 led、mqtt", text: $filter)
                     .textFieldStyle(.roundedBorder)
                 Button("重读") { Task { await model.loadConfigTree() } }
+                    .disabled(!model.connected)
             }
             .padding(10)
             Divider()
@@ -205,7 +207,8 @@ struct RawConfigPane: View {
                             ConfigNode(path: k, depth: 0, filter: filter, expanded: $expanded)
                         }
                     } else {
-                        Text("读取中…").foregroundStyle(.secondary)
+                        Text(model.connected ? "读取中…" : "未连接，也没有这台灯的配置缓存。")
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(10)
@@ -217,7 +220,7 @@ struct RawConfigPane: View {
                         .font(.caption).foregroundStyle(.orange)
                     Spacer()
                     Button("放弃") { model.revertConfig() }
-                    Button("保存") { model.saveConfig() }.disabled(model.busy)
+                    Button("保存") { model.saveConfig() }.disabled(model.busy || !model.connected)
                 }
                 .padding(10).background(.thinMaterial)
             }
@@ -311,6 +314,7 @@ struct RawConfigRow: View {
             }
             Spacer(minLength: 0)
         }
+        .disabled(!model.connected)
         .padding(.leading, CGFloat(depth) * 12)
     }
 }

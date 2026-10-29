@@ -10,7 +10,7 @@ struct ConsoleAnalyzer: View {
 
     var body: some View {
         if model.selected == nil {
-            ContentUnavailableView("未连接", systemImage: "lightbulb.led",
+            ContentUnavailableView("未选灯", systemImage: "lightbulb.led",
                                    description: Text("在左侧选一台灯。"))
         } else {
             ScrollView {
@@ -73,7 +73,7 @@ struct LedDebugPane: View {
                 }
             }
 
-            if let d = model.debug {
+            if let d = model.debug, model.connected {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
                     GridRow { label("strip 长度"); Text("\(d.n)").font(.callout.monospacedDigit()) }
                     GridRow {
@@ -94,6 +94,9 @@ struct LedDebugPane: View {
                 }
             }
         }
+        // 没连上灯不能点亮；连接断了就停掉续命
+        .disabled(!model.connected)
+        .onChange(of: model.connected) { _, on in if !on, holding { holdTask?.cancel(); holdTask = nil } }
         // 切走这一页就松手，否则灯会一直被按着不放
         .onDisappear { if holding { stopHold() } }
     }

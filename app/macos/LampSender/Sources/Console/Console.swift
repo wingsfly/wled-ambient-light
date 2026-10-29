@@ -112,7 +112,8 @@ struct ConsoleView: View {
         // 带上会变的量：别处改了灯，这里跟着动才说明 WebSocket 是活的
         let st = model.state
         let live = "电源 \(st?.on == true ? "开" : "关") · 亮度 \(st?.bri ?? -1) · 效果 \(st?.primary?.fx ?? -1)"
-        return "\(d.name) @ \(d.host) · 固件 \(i.ver ?? "?") · "
+        return (model.connected ? "" : "离线快照 · ")
+             + "\(d.name) @ \(d.host) · 固件 \(i.ver ?? "?") · "
              + "\(model.effects.count) 效果 / \(model.palettes.count) 调色板 / \(model.presets.count) 预设 · \(live)"
     }
 
@@ -124,14 +125,27 @@ struct ConsoleView: View {
 
     @ViewBuilder
     private var detail: some View {
-        Group {
-            switch page {
-            case .control:  ConsoleControl()
-            case .presets:  ConsolePresets()
-            case .segments: ConsoleSegments()
-            case .analyzer: ConsoleAnalyzer()
-            case .settings: ConsoleSettings()
+        VStack(spacing: 0) {
+            // 没连上灯：各页显示的是上次连上时的快照，只能看。单独占一行，
+            // 用 safeAreaInset 的话滚动内容会从它底下钻过去，压住标题
+            if let note = model.offlineNote {
+                Label(note, systemImage: "wifi.slash")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.bar)
+                Divider()
             }
+            Group {
+                switch page {
+                case .control:  ConsoleControl()
+                case .presets:  ConsolePresets()
+                case .segments: ConsoleSegments()
+                case .analyzer: ConsoleAnalyzer()
+                case .settings: ConsoleSettings()
+                }
+            }
+            .frame(maxHeight: .infinity)
         }
         .navigationTitle(model.selected?.name ?? "氛围灯")
         .navigationSubtitle(model.selected?.host ?? "未连接")
@@ -151,7 +165,7 @@ struct ConsoleView: View {
             }
         }
         .overlay(alignment: .top) {
-            if let e = model.error {
+            if let e = model.error, model.connected {
                 Text(e)
                     .font(.caption).padding(8)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))

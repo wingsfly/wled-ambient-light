@@ -75,12 +75,14 @@ struct ConsoleSegments: View {
                 }
                 .labelsHidden().frame(maxWidth: 220)
                 Button(applied ? "已应用" : "应用到灯") { confirmApply = true }
-                    .disabled(template == nil || model.busy || applied)
+                    .disabled(template == nil || model.busy || applied || !model.connected)
                     .buttonStyle(.borderedProminent)
                 Spacer()
+                // 模板存在灯板上，没连上就存不进去
                 Button("载入…") { showImporter = true }
+                    .disabled(!model.connected)
                 Button("存当前") { saveName = ""; showSave = true }
-                    .disabled((model.state?.seg?.isEmpty ?? true))
+                    .disabled((model.state?.seg?.isEmpty ?? true) || !model.connected)
             }
             if let t = template { templateSummary(t) }
             if let n = note {
@@ -231,6 +233,7 @@ struct SegmentEditor: View {
                     set: { model.updateSegment(.init(id: id, mi: $0)) }))
             }
         }
+        .disabled(!model.connected)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

@@ -22,10 +22,10 @@ struct DeviceInfoPane: View {
                         ("已运行", i.uptime.map { uptimeText($0) } ?? "—"),
                     ])
                 } else {
-                    Text("未连接").foregroundStyle(.secondary)
+                    Text("未连接，也没有这台灯的缓存。").foregroundStyle(.secondary)
                 }
 
-                if let t = model.telemetry {
+                if let t = model.telemetry, model.connected {
                     Divider()
                     Text("当前音源").font(.headline)
                     grid([
@@ -115,7 +115,7 @@ struct WiFiPane: View {
                         model.addWiFi(ssid: ssid, psk: psk)
                         ssid = ""; psk = ""      // 不留在界面上，也不写进任何存储
                     }
-                    .disabled(ssid.isEmpty || psk.isEmpty)
+                    .disabled(ssid.isEmpty || psk.isEmpty || !model.connected)
                 }
             }
             .padding(16)
@@ -139,7 +139,7 @@ struct FirmwarePane: View {
                 }
                 HStack {
                     Button("选择固件并升级…") { showPicker = true }
-                        .disabled(model.selected == nil || model.busy)
+                        .disabled(model.selected == nil || model.busy || !model.connected)
                     if model.busy { ProgressView().controlSize(.small) }
                 }
                 if let n = note { Text(n).font(.caption).foregroundStyle(.secondary) }
