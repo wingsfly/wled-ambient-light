@@ -164,6 +164,17 @@ void test_agc_converges_to_target(void) {
         "AGC 未收敛到目标电平");
 }
 
+// 输入比 target 响时 AGC 也得压回 target：原先下限 1.0 只放大不衰减，Mac 端输入增益 4.35× 时
+// RMS 0.8 原样送进效果，亮度恒满（2026-10-30）。attack 快，1s 内就该到位。
+void test_agc_attenuates_loud_input_to_target(void) {
+    const AgcConfig cfg;
+    Agc g;
+    agcInit(g, cfg, 10.0f);
+    for (int k = 0; k < 100; ++k) agcUpdate(g, cfg, 0.8f);   // 1s
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.05f * cfg.target, cfg.target, g.gain * 0.8f,
+        "响的输入没被压回目标电平");
+}
+
 // 静音必须门限，且增益不得爬到上限 —— 这是 §4 的验收条目
 // 「静音：频段趋零，AGC 不失控放大底噪」。
 void test_agc_gates_silence_and_does_not_run_away(void) {
@@ -419,6 +430,7 @@ int main(int, char **) {
     RUN_TEST(test_peak_attacks_instantly_and_decays);
     RUN_TEST(test_peak_never_below_current);
     RUN_TEST(test_agc_converges_to_target);
+    RUN_TEST(test_agc_attenuates_loud_input_to_target);
     RUN_TEST(test_agc_gates_silence_and_does_not_run_away);
     RUN_TEST(test_agc_gate_has_hysteresis);
     RUN_TEST(test_agc_attack_is_much_faster_than_release);

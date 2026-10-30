@@ -693,6 +693,26 @@ void test_color_flow_speed_follows_the_bpm(void) {
         "BPM 翻倍，流动速度应当接近翻倍");
 }
 
+// 管底像素的亮度（RGB 最大分量）
+static uint8_t flowBrightness(float rms_fast) {
+    AudioFrame f = liveFrame();
+    f.rms_slow = 0.25f;                      // AGC 目标电平：慢包络被稳在这里
+    f.rms_fast = rms_fast;
+    Geometry g; Rgb px[TOTAL_LEDS];
+    FxState st{};
+    for (int k = 0; k < 5; ++k) fxRender(FX_COLOR_FLOW, st, g_fxcfg, f, g, false, 23.22f, px);
+    const Rgb c = px[mapPixel(g, SIDE_L, 0.0f)];
+    return c.r > c.g ? (c.r > c.b ? c.r : c.b) : (c.g > c.b ? c.g : c.b);
+}
+
+void test_color_flow_brightness_follows_the_level_at_agc_target(void) {
+    // AGC 把慢包络稳在 0.25，亮度的起伏得靠快包络。原先慢包络 ×2，目标电平就把亮度顶满，
+    // 轻重拍看起来一样亮（2026-10-30 实机）。
+    const uint8_t quiet = flowBrightness(0.10f), loud = flowBrightness(0.40f);
+    TEST_ASSERT_TRUE_MESSAGE(loud < 255, "目标电平上不能已经顶满");
+    TEST_ASSERT_TRUE_MESSAGE(loud > quiet + 30, "快包络变响，亮度必须明显变亮");
+}
+
 void test_color_flow_washes_out_on_a_section_change(void) {
     AudioFrame f = liveFrame();
     Geometry g; Rgb px[TOTAL_LEDS];
@@ -1412,6 +1432,7 @@ int main(int, char **) {
     RUN_TEST(test_color_flow_direction_follows_the_energy_trend);
     RUN_TEST(test_color_flow_speed_follows_the_bpm);
     RUN_TEST(test_color_flow_washes_out_on_a_section_change);
+    RUN_TEST(test_color_flow_brightness_follows_the_level_at_agc_target);
     RUN_TEST(test_melody_line_height_follows_the_pitch);
     RUN_TEST(test_melody_line_maps_octaves_apart_unlike_chroma_ring);
     RUN_TEST(test_melody_line_leaves_a_trail_that_fades);

@@ -47,6 +47,12 @@ constexpr float kBandHz[NUM_BANDS] = {
 constexpr uint16_t kLampSyncPort = 11989;
 constexpr uint32_t kRemoteFreshMs = 500;   // 超过则回落本地桥接
 
+// lamp 管线（LAMP1 远端、本地完整管线）给的 rms / peak 是 AGC **之前**的包络，只有 bands 乘了 AGC 增益；
+// 效果却按 AGC 之后的尺度用电平（kFxLevelScale = 3，目标 RMS 0.25 落在 0.75）。不补这一步，电平跟着
+// 输入音量与发送端的输入增益走：Mac 端输入增益 4.35× 时 rms 到 0.7–1.0，♪ 效果亮度恒满（2026-10-30）。
+// 门限关时归零，与 bands 一致。管线内部的 mood 用的是 AGC 之前的包络，不受影响。
+inline float agcLevel(float raw, float gain, bool gated) { return gated ? 0.0f : raw * gain; }
+
 struct __attribute__((packed)) LampSyncPacket {
   char     magic[6];        // "LAMP1\0"
   uint8_t  version;         // 1
@@ -112,10 +118,10 @@ struct LampBridge {
       frame.bands[i] = r.bands[i]; frame.bands_h[i] = r.bands_h[i]; frame.bands_p[i] = r.bands_p[i];
     }
     for (int i = 0; i < kChroma; i++) frame.chroma[i] = r.chroma[i];
-    frame.rms_fast = r.rms;
+    frame.rms_fast = agcLevel(r.rms, r.gain, r.flags & 0x08);
     rmsSlow += (frame.rms_fast - rmsSlow) * (dtMs / 2000.0f);
     frame.rms_slow = rmsSlow;
-    frame.peak = r.peak; frame.gain = r.gain;
+    frame.peak = agcLevel(r.peak, r.gain, r.flags & 0x08); frame.gain = r.gain;
     frame.gated = r.flags & 0x08; frame.onset = pulseLatch & 0x01; frame.onset_rate = r.rate;
     frame.bpm = r.bpm; frame.bpm_conf = r.conf;
     frame.beat_locked = r.flags & 0x02; frame.phase = r.phase;
@@ -342,6 +348,9 @@ void serviceLocalPipeline() {
     F.complexToMagnitude();                      // 幅度就地写入 localRe[0..n/2]
     for (int i = 0; i <= n / 2; i++) localMag[i] = localRe[i];
     localFrame   = pipelineProcess(localPipe, localCfg, localPcm, localMag, millis());
+    localFrame.rms_fast = agcLevel(localFrame.rms_fast, localFrame.gain, localFrame.gated);
+    localFrame.rms_slow = agcLevel(localFrame.rms_slow, localFrame.gain, localFrame.gated);
+    localFrame.peak     = agcLevel(localFrame.peak,     localFrame.gain, localFrame.gated);
     localFrameMs = millis();
     // hop 取**当前**档位 —— 档位可能刚在 pipelineProcess 里换过，
     // 用旧值会让时间轴慢慢漂（capi 注释同款）。
