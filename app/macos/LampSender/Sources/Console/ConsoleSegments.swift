@@ -215,7 +215,7 @@ struct SegmentEditor: View {
                 Picker("调色板", selection: Binding(
                     get: { segment.pal ?? 0 },
                     set: { model.updateSegment(.init(id: id, pal: $0)) })) {
-                        ForEach(model.paletteChoices) { Text($0.name).tag($0.id) }
+                        ForEach(model.paletteChoices) { Text($0.title).tag($0.id) }
                     }
                 LabeledSlider(title: "速度", value: segment.sx ?? 128, range: 0...255) {
                     model.updateSegment(.init(id: id, sx: $0))

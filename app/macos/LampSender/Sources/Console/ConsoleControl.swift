@@ -123,11 +123,7 @@ struct ConsoleControl: View {
                 LabeledSlider(title: label, value: seg.ix ?? 128, range: 0...255) { model.setIntensity($0) }
                 // 讯飞调色板（原厂板固件注册，「讯飞: …」）排在最前；效果不用调色板时不显示
                 if model.currentUsesPalette {
-                    Picker("调色板", selection: Binding(
-                        get: { seg.pal ?? 0 },
-                        set: { model.setPalette($0) })) {
-                            ForEach(model.paletteChoices) { Text($0.name).tag($0.id) }
-                        }
+                    PaletteGallery(current: seg.pal ?? 0, segColors: seg.col)
                 }
                 if mode == .fixed {
                     Text("WLED 原生效果的「强度」含义各不相同（密度、数量、宽度等）。")
@@ -459,6 +455,64 @@ struct ConsoleControl: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline)
             content()
+        }
+    }
+}
+
+/// 调色板色带：每张卡片画出调色板本身的渐变（/json/palx 的色标），下面是中文名与英文原名。
+/// 网格限高、自己滚动，打开时滚到当前那张。没读到色标的只显示名字。
+private struct PaletteGallery: View {
+    @EnvironmentObject private var model: LampViewModel
+    let current: Int
+    let segColors: [[Int]]?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("调色板 · \(model.paletteChoices.first { $0.id == current }?.title ?? "")")
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
+                        ForEach(model.paletteChoices) { p in card(p).id(p.id) }
+                    }
+                    .padding(2)
+                }
+                .frame(height: 210)
+                .onAppear { proxy.scrollTo(current, anchor: .center) }
+                .onChange(of: current) { _, id in withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            }
+        }
+    }
+
+    private func card(_ p: PaletteChoice) -> some View {
+        let selected = p.id == current
+        let stops = model.palettePreviews[p.id].map { LightModes.paletteStops($0, segColors: segColors, id: p.id) } ?? []
+        return Button { model.setPalette(p.id) } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(swatch(stops))
+                    .frame(height: 22)
+                    .overlay(RoundedRectangle(cornerRadius: 5)
+                        .stroke(selected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: selected ? 2.5 : 0.5))
+                Text(p.title).font(.caption).lineLimit(1)
+                    .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                // 英文原名：与灯的网页、WLED 文档对得上
+                Text(p.zh != nil ? String(p.name.trimmingPrefix("讯飞: ")) : " ")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(p.name)
+    }
+
+    private func swatch(_ stops: [(Double, [Int])]) -> AnyShapeStyle {
+        switch stops.count {
+        case 0: return AnyShapeStyle(Color.secondary.opacity(0.15))
+        case 1: return AnyShapeStyle(Color(rgb: stops[0].1))
+        default:
+            let s = stops.sorted { $0.0 < $1.0 }.map { Gradient.Stop(color: Color(rgb: $0.1), location: $0.0) }
+            return AnyShapeStyle(LinearGradient(stops: s, startPoint: .leading, endPoint: .trailing))
         }
     }
 }
