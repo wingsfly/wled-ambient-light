@@ -80,7 +80,10 @@ struct AgcConfig {
     float target     = 0.25f;      // 归一化后的目标 RMS
     float squelch    = 0.002f;     // 低于此视为静音
     float gate_hyst  = 0.5f;       // 关门阈 = squelch × 此值，开门阈 = squelch
-    float gain_min   = 1.0f;
+    // 下限要远低于 1：输入比 target 响时 AGC 得能往下压。原先 1.0，只放大不衰减 —— Mac 端输入增益 4.35×
+    // 时 RMS 到 0.7–1.0，频段与电平都超出效果的设计尺度，♪ 效果亮度恒满（2026-10-30）。0.05 让满幅输入
+    // （RMS≈1）也能压回 target。
+    float gain_min   = 0.05f;
     // 远场麦克风的输入 RMS 常在 0.001–0.01 量级，要拉到 target=0.25 需要
     // 25–250 倍。上限 40 会让 AGC 顶格还够不着目标 —— 实测拿手机节拍器对着
     // 笔记本麦克风，增益恒为 40.0，频段能量始终偏低、灯几乎不亮。

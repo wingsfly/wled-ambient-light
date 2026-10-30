@@ -778,7 +778,9 @@ inline FlowParams flowParams(const FxState &st, const AudioFrame &f) {
     FlowParams p;
     p.span = 0.10f + 0.80f * mo;
     p.sat  = 0.75f + 0.25f * mo;
-    float lvl = (f.rms_slow * 2.0f + f.rms_fast * 0.5f) * kFxLevelScale;
+    // 快慢各半：AGC 把慢包络稳在目标 0.25 附近，目标电平落 0.75，起伏靠快包络。原先慢包络 ×2，
+    // 目标电平就把 lvl 顶到 1.9，亮度恒满、看不出律动（2026-10-30）
+    float lvl = (f.rms_slow + f.rms_fast) * 0.5f * kFxLevelScale;
     if (!isfinite(lvl) || lvl < 0.0f) lvl = 0.0f;
     if (lvl > 1.0f) lvl = 1.0f;
     p.lvl  = lvl;
